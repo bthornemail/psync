@@ -47,3 +47,8 @@ See `docs/proofs/README.md` for bounded conformance and semantics receipts.
 
 See [CATEGORY.md](/root/psync/docs/CATEGORY.md) for the categorical
 interpretation of artifacts, transforms, annotations, and replay.
+
+Companion architecture notes:
+
+- [ARCHITECTURE-BUNDLE.md](/root/psync/docs/ARCHITECTURE-BUNDLE.md)
+- [FANO-CLOSURE.md](/root/psync/docs/FANO-CLOSURE.md)

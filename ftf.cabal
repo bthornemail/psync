@@ -19,4 +19,5 @@ executable ftf
       filepath,
       memory,
       optparse-applicative,
-      text
+      text,
+      time

@@ -3,6 +3,7 @@
 
 module Main where
 
+import Control.Applicative ((<|>))
 import Control.Monad (forM_, when)
 import Crypto.Error (CryptoFailable (..))
 import Crypto.Hash (Digest, SHA256, hash)
@@ -28,11 +29,13 @@ import Data.Set (Set)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Data.Time.Clock (getCurrentTime)
+import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Word (Word8)
 import qualified Options.Applicative as OA
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory)
 import System.Exit (exitFailure, exitSuccess)
-import System.FilePath ((</>))
+import System.FilePath ((</>), (<.>), takeDirectory)
 import System.IO (stdout)
 
 import qualified Codec.CBOR.Encoding as Cbor
@@ -122,6 +125,26 @@ data Msg = Msg
   , mBody :: Body
   , mWitness :: Maybe Hash
   , mSig :: Sig
+  } deriving (Eq, Show)
+
+data AppConfig = AppConfig
+  { acActiveSpace :: Maybe Text
+  } deriving (Eq, Show)
+
+data SpaceConfig = SpaceConfig
+  { scName :: Text
+  , scRealm :: Text
+  , scSpaceID :: Hash
+  , scCreatedAt :: Text
+  , scRootPubkey :: PeerID
+  , scDefaultTopic :: Topic
+  , scActiveMember :: Text
+  } deriving (Eq, Show)
+
+data MemberKeyConfig = MemberKeyConfig
+  { mkMember :: Text
+  , mkPk :: PeerID
+  , mkSk :: BS.ByteString
   } deriving (Eq, Show)
 
 blankSig :: Msg -> Msg
@@ -706,11 +729,23 @@ instance A.FromJSON Body where
 
 data Cmd
   = CmdVersion
+  | CmdSpaceNew Text (Maybe Text) (Maybe FilePath) Bool
+  | CmdSpaceShow Text
+  | CmdSpaceList
+  | CmdIdentityDerive (Maybe Text) (Maybe Text) (Maybe Text)
+  | CmdIdentityShow (Maybe Text)
+  | CmdIdentityUse (Maybe Text) Text
+  | CmdAliasSet Text BS.ByteString (Maybe Text) (Maybe Topic)
+  | CmdAliasGet Text (Maybe Text) (Maybe Topic)
+  | CmdAliasList (Maybe Text) (Maybe Topic)
+  | CmdXform Text (Maybe Text) [Text] [Text] (Maybe BS.ByteString) (Maybe FilePath) (Maybe FilePath) (Maybe Topic)
+  | CmdPut FilePath (Maybe Text) (Maybe Topic)
   | CmdHashMsg FilePath
   | CmdSignMsg BS.ByteString FilePath
   | CmdGenKeypair
   | CmdSelfTest
-  | CmdTrace Realm Topic BS.ByteString FilePath
+  | CmdTraceLegacy Realm Topic BS.ByteString FilePath
+  | CmdTraceSpace (Maybe Text) (Maybe Topic) Text
   | CmdCasPut FilePath
   | CmdCasHas BS.ByteString
   | CmdCasGet BS.ByteString
@@ -724,8 +759,23 @@ cmdParser =
         "version"
         (OA.info versionP (OA.progDesc "Print CLI and protocol version info"))
         <> OA.command
-        "hash-msg"
-        (OA.info hashP (OA.progDesc "Hash one NDJSON message as multihash sha2-256"))
+          "space"
+          (OA.info spaceP (OA.progDesc "Manage local FTF spaces"))
+        <> OA.command
+          "identity"
+          (OA.info identityP (OA.progDesc "Manage local space identities"))
+        <> OA.command
+          "alias"
+          (OA.info aliasP (OA.progDesc "Manage local aliases inside a space"))
+        <> OA.command
+          "xform"
+          (OA.info xformP (OA.progDesc "Append a signed xform event in a space"))
+        <> OA.command
+          "put"
+          (OA.info putP (OA.progDesc "Store a blob in a space CAS and append a signed put event"))
+        <> OA.command
+          "hash-msg"
+          (OA.info hashP (OA.progDesc "Hash one NDJSON message as multihash sha2-256"))
         <> OA.command
           "sign-msg"
           (OA.info signP (OA.progDesc "Sign one NDJSON message using Ed25519 over raw mh bytes"))
@@ -756,6 +806,97 @@ cmdParser =
     )
  where
   versionP = pure CmdVersion
+  spaceP =
+    OA.hsubparser
+      ( OA.command
+          "new"
+          (OA.info spaceNewP (OA.progDesc "Create a new local space scaffold"))
+          <> OA.command
+            "show"
+            (OA.info spaceShowP (OA.progDesc "Show one local space"))
+          <> OA.command
+            "ls"
+            (OA.info spaceListP (OA.progDesc "List local spaces"))
+      )
+  spaceNewP =
+    CmdSpaceNew
+      <$> fmap T.pack (OA.strArgument (OA.metavar "NAME"))
+      <*> OA.optional (OA.option OA.str (OA.long "realm" <> OA.metavar "REALM"))
+      <*> OA.optional (OA.strOption (OA.long "path" <> OA.metavar "DIR"))
+      <*> OA.switch (OA.long "show-seed" <> OA.help "Print root seed hex")
+  spaceShowP = CmdSpaceShow <$> fmap T.pack (OA.strArgument (OA.metavar "NAME"))
+  spaceListP = pure CmdSpaceList
+  identityP =
+    OA.hsubparser
+      ( OA.command
+          "derive"
+          (OA.info identityDeriveP (OA.progDesc "Derive a deterministic member identity inside a space"))
+          <> OA.command
+            "show"
+            (OA.info identityShowP (OA.progDesc "Show the active identity inside a space"))
+          <> OA.command
+            "use"
+            (OA.info identityUseP (OA.progDesc "Switch the active identity inside a space"))
+      )
+  identityDeriveP =
+    CmdIdentityDerive
+      <$> OA.optional (OA.option OA.str (OA.long "space" <> OA.metavar "NAME"))
+      <*> OA.optional (OA.option OA.str (OA.long "path" <> OA.metavar "HD_PATH"))
+      <*> OA.optional (OA.option OA.str (OA.long "role" <> OA.metavar "ROLE"))
+  identityShowP =
+    CmdIdentityShow
+      <$> OA.optional (OA.option OA.str (OA.long "space" <> OA.metavar "NAME"))
+  identityUseP =
+    CmdIdentityUse
+      <$> OA.optional (OA.option OA.str (OA.long "space" <> OA.metavar "NAME"))
+      <*> OA.option OA.str (OA.long "member" <> OA.metavar "ID")
+  aliasP =
+    OA.hsubparser
+      ( OA.command
+          "set"
+          (OA.info aliasSetP (OA.progDesc "Append an alias claim in a space"))
+          <> OA.command
+            "get"
+            (OA.info aliasGetP (OA.progDesc "Resolve one alias in a space"))
+          <> OA.command
+            "ls"
+            (OA.info aliasListP (OA.progDesc "List resolved aliases in a space"))
+      )
+  aliasSetP =
+    CmdAliasSet
+      <$> fmap T.pack (OA.strArgument (OA.metavar "LOGICAL_ID"))
+      <*> OA.argument
+        (OA.eitherReader (\s -> fromHex (TE.encodeUtf8 (T.pack s))))
+        (OA.metavar "TARGET_MH_HEX")
+      <*> OA.optional (OA.option OA.str (OA.long "space" <> OA.metavar "NAME"))
+      <*> OA.optional (OA.option OA.str (OA.long "topic" <> OA.metavar "TOPIC"))
+  aliasGetP =
+    CmdAliasGet
+      <$> fmap T.pack (OA.strArgument (OA.metavar "LOGICAL_ID"))
+      <*> OA.optional (OA.option OA.str (OA.long "space" <> OA.metavar "NAME"))
+      <*> OA.optional (OA.option OA.str (OA.long "topic" <> OA.metavar "TOPIC"))
+  aliasListP =
+    CmdAliasList
+      <$> OA.optional (OA.option OA.str (OA.long "space" <> OA.metavar "NAME"))
+      <*> OA.optional (OA.option OA.str (OA.long "topic" <> OA.metavar "TOPIC"))
+  xformP =
+    CmdXform
+      <$> fmap T.pack (OA.strArgument (OA.metavar "LABEL"))
+      <*> OA.optional (OA.option OA.str (OA.long "space" <> OA.metavar "NAME"))
+      <*> OA.many (fmap T.pack (OA.strOption (OA.long "input" <> OA.metavar "HASH_OR_PATH")))
+      <*> OA.many (fmap T.pack (OA.strOption (OA.long "output" <> OA.metavar "HASH_OR_PATH")))
+      <*> OA.optional
+        (OA.option
+          (OA.eitherReader (\s -> fromHex (TE.encodeUtf8 (T.pack s))))
+          (OA.long "tool" <> OA.metavar "TOOL_MH_HEX"))
+      <*> OA.optional (OA.strOption (OA.long "params" <> OA.metavar "FILE"))
+      <*> OA.optional (OA.strOption (OA.long "receipt" <> OA.metavar "FILE"))
+      <*> OA.optional (OA.option OA.str (OA.long "topic" <> OA.metavar "TOPIC"))
+  putP =
+    CmdPut
+      <$> OA.strArgument (OA.metavar "PATH")
+      <*> OA.optional (OA.option OA.str (OA.long "space" <> OA.metavar "NAME"))
+      <*> OA.optional (OA.option OA.str (OA.long "topic" <> OA.metavar "TOPIC"))
   hashP = CmdHashMsg <$> OA.strArgument (OA.metavar "MSG.ndjson")
   signP =
     CmdSignMsg
@@ -766,13 +907,20 @@ cmdParser =
   genP = pure CmdGenKeypair
   selfTestP = pure CmdSelfTest
   traceP =
-    CmdTrace
+    traceSpaceP <|> traceLegacyP
+  traceLegacyP =
+    CmdTraceLegacy
       <$> OA.option OA.str (OA.long "realm" <> OA.metavar "REALM")
       <*> OA.option OA.str (OA.long "topic" <> OA.metavar "TOPIC")
       <*> OA.argument
         (OA.eitherReader (\s -> fromHex (TE.encodeUtf8 (T.pack s))))
         (OA.metavar "ARTIFACT_MH_HEX")
       <*> OA.strArgument (OA.metavar "TOPIC.ndjson")
+  traceSpaceP =
+    CmdTraceSpace
+      <$> OA.optional (OA.option OA.str (OA.long "space" <> OA.metavar "NAME"))
+      <*> OA.optional (OA.option OA.str (OA.long "topic" <> OA.metavar "TOPIC"))
+      <*> fmap T.pack (OA.strArgument (OA.metavar "HASH_OR_ALIAS_OR_PATH"))
   casPutP = CmdCasPut <$> OA.strArgument (OA.metavar "PATH")
   casHasP =
     CmdCasHas
@@ -808,6 +956,260 @@ run = \case
     putStrLn ("ftf_protocol_version=" <> show ftfProtocolVersion)
     putStrLn ("ftf_msg_domain_tag=" <> BSC.unpack ftfMsgDomainTag)
     putStrLn "ftf_preimage_prefix=ftf-msg-v1\\0"
+  CmdSpaceNew name mSpaceRealm mPath showSeed -> do
+    let spaceDir = fromMaybe (defaultSpacePath name) mPath
+    exists <- doesDirectoryExist spaceDir
+    when exists $
+      fail ("space already exists: " <> spaceDir)
+    createDirectoryIfMissing True spaceDir
+    createDirectoryIfMissing True (spaceTopicsDir spaceDir)
+    createDirectoryIfMissing True (spaceCasDir spaceDir)
+    createDirectoryIfMissing True (spaceKeysDir spaceDir)
+    sk <- Ed.generateSecretKey
+    let pkBytes = convert (Ed.toPublic sk) :: BS.ByteString
+        seedBytes = convert sk :: BS.ByteString
+        sk64 = BS.concat [seedBytes, pkBytes]
+        realm = fromMaybe ("ftf:" <> name) mSpaceRealm
+        spaceId = mhBlob (BS.concat [TE.encodeUtf8 realm, "\NUL", pkBytes])
+    now <- getCurrentTime
+    let createdAt = T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" now)
+        spaceCfg =
+          SpaceConfig
+            { scName = name
+            , scRealm = realm
+            , scSpaceID = spaceId
+            , scCreatedAt = createdAt
+            , scRootPubkey = PeerID pkBytes
+            , scDefaultTopic = "provenance/main"
+            , scActiveMember = "owner"
+            }
+        keyObj =
+          A.object
+            [ "member" A..= ("owner" :: Text)
+            , "pk" A..= TE.decodeUtf8 (toHex pkBytes)
+            , "sk_seed" A..= TE.decodeUtf8 (toHex seedBytes)
+            , "sk" A..= TE.decodeUtf8 (toHex sk64)
+            ]
+    BL.writeFile (spaceConfigPath spaceDir) (A.encode spaceCfg)
+    BL.writeFile (spaceOwnerKeyPath spaceDir) (A.encode keyObj)
+    setActiveSpaceIfUnset name
+    putStrLn ("Space: " <> T.unpack name)
+    putStrLn ("Realm: " <> T.unpack realm)
+    putStrLn ("Space ID: " <> show spaceId)
+    putStrLn ("Created: " <> spaceDir)
+    when showSeed $
+      putStrLn ("Seed: " <> BSC.unpack (toHex seedBytes))
+  CmdSpaceShow name -> do
+    let spaceDir = defaultSpacePath name
+    cfg <- loadSpaceConfig name
+    topicCount <- countDirectoryEntries (spaceTopicsDir spaceDir)
+    casCount <- countDirectoryEntries (spaceCasDir spaceDir)
+    memberCount <- countDirectoryEntries (spaceKeysDir spaceDir)
+    putStrLn ("Space: " <> T.unpack (scName cfg))
+    putStrLn ("Realm: " <> T.unpack (scRealm cfg))
+    putStrLn ("Space ID: " <> show (scSpaceID cfg))
+    putStrLn ("Members: " <> show memberCount)
+    putStrLn ("Topics: " <> show topicCount)
+    putStrLn ("CAS Objects: " <> show casCount)
+    putStrLn ("Active Member: " <> T.unpack (scActiveMember cfg))
+  CmdSpaceList -> do
+    exists <- doesDirectoryExist spacesRoot
+    if not exists
+      then pure ()
+      else do
+        names <- sortOn id <$> listDirectory spacesRoot
+        forM_ names $ \nameS -> do
+          let name = T.pack nameS
+          cfg <- loadSpaceConfig name
+          memberCount <- countDirectoryEntries (spaceKeysDir (defaultSpacePath name))
+          putStrLn (T.unpack (scName cfg) <> "\trealm=" <> T.unpack (scRealm cfg) <> "\tmembers=" <> show memberCount)
+  CmdIdentityDerive mSpaceName mDerivePath mRole -> do
+    (spaceDir, _) <- resolveSpaceSelection mSpaceName
+    (label, memberName) <- resolveDeriveTarget mDerivePath mRole
+    rootKey <- loadMemberKeyByName spaceDir "owner"
+    sk <- either (fail . T.unpack) pure (parseSecretKey (mkSk rootKey))
+    let rootSeed = convert sk :: BS.ByteString
+        seedBytes = sha256Bytes (BS.concat [rootSeed, "\NUL", TE.encodeUtf8 label])
+    derivedSk <- either (fail . T.unpack) pure (parseSecretKey seedBytes)
+    let pkBytes = convert (Ed.toPublic derivedSk) :: BS.ByteString
+        sk64 = BS.concat [seedBytes, pkBytes]
+        memberCfg =
+          A.object
+            [ "member" A..= memberName
+            , "pk" A..= TE.decodeUtf8 (toHex pkBytes)
+            , "sk_seed" A..= TE.decodeUtf8 (toHex seedBytes)
+            , "sk" A..= TE.decodeUtf8 (toHex sk64)
+            ]
+        outPath = spaceMemberKeyPath spaceDir memberName
+    BL.writeFile outPath (A.encode memberCfg)
+    putStrLn ("Member: " <> T.unpack memberName)
+    putStrLn ("Path: " <> T.unpack label)
+    putStrLn ("Public Key: " <> BSC.unpack (toHex pkBytes))
+    putStrLn ("Peer ID: " <> BSC.unpack (toHex pkBytes))
+    putStrLn ("Stored: " <> outPath)
+  CmdIdentityShow mSpaceName -> do
+    (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
+    memberCfg <- loadActiveMemberKey spaceDir spaceCfg
+    putStrLn ("Space: " <> T.unpack (scName spaceCfg))
+    putStrLn ("Active Member: " <> T.unpack (mkMember memberCfg))
+    putStrLn ("Public Key: " <> show (mkPk memberCfg))
+    putStrLn ("Peer ID: " <> show (mkPk memberCfg))
+  CmdIdentityUse mSpaceName memberName -> do
+    (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
+    _ <- loadMemberKeyByName spaceDir memberName
+    let nextCfg = spaceCfg {scActiveMember = memberName}
+    writeSpaceConfig spaceDir nextCfg
+    putStrLn ("Space: " <> T.unpack (scName nextCfg))
+    putStrLn ("Active Member: " <> T.unpack (scActiveMember nextCfg))
+  CmdAliasSet logicalId targetRaw mSpaceName mTopicName -> do
+    (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
+    memberCfg <- loadActiveMemberKey spaceDir spaceCfg
+    let topic = fromMaybe defaultAliasTopic mTopicName
+    msgs <- readTopicMsgsIfExists (spaceTopicPath spaceDir topic)
+    let st = foldl' insertMsg emptyStore msgs
+        (verified, bad) = topicReplay st (scRealm spaceCfg) topic
+    when (not (null bad)) $
+      fail ("alias topic has rejected messages: " <> T.unpack topic)
+    casSet <- loadCasSetFrom (spaceCasDir spaceDir)
+    let (aliases, qs) = resolveAliases casSet st (scRealm spaceCfg) topic
+    when (not (null qs)) $
+      fail ("alias topic has quarantine entries: " <> T.unpack topic)
+    let prevAliasHash = aeHead <$> lookupAlias aliases logicalId
+        prevHash = fst <$> lastMay verified
+        nextT = maybe 1 ((+ 1) . unTm . mT . snd) (lastMay verified)
+    sk <- either (fail . T.unpack) pure (parseSecretKey (mkSk memberCfg))
+    let unsigned =
+          Msg
+            { mV = ftfProtocolVersion
+            , mRealm = scRealm spaceCfg
+            , mTopic = topic
+            , mPrev = prevHash
+            , mT = Tm nextT
+            , mAuthor = mkPk memberCfg
+            , mCaps = []
+            , mBody = AliasClaim (AliasClaimBody logicalId (Hash targetRaw) prevAliasHash Nothing)
+            , mWitness = Nothing
+            , mSig = Sig BS.empty
+            }
+        signed = setSig (signMh sk (mhMsg unsigned)) unsigned
+    appendMsgToTopicFile (spaceTopicPath spaceDir topic) signed
+    putStrLn ("id:      " <> T.unpack logicalId)
+    putStrLn ("target:  " <> show (Hash targetRaw))
+    putStrLn ("event:   " <> show (mhMsg signed))
+    putStrLn ("topic:   " <> T.unpack topic)
+  CmdAliasGet logicalId mSpaceName mTopicName -> do
+    (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
+    let topic = fromMaybe defaultAliasTopic mTopicName
+    msgs <- readTopicMsgsIfExists (spaceTopicPath spaceDir topic)
+    casSet <- loadCasSetFrom (spaceCasDir spaceDir)
+    let st = foldl' insertMsg emptyStore msgs
+        (aliases, qs) = resolveAliases casSet st (scRealm spaceCfg) topic
+    putStrLn ("quarantine=" <> show (length qs))
+    case lookupAlias aliases logicalId of
+      Nothing -> putStrLn "not_found"
+      Just ae -> do
+        putStrLn ("target_hash=" <> show (aeTarget ae))
+        case aeStatus ae of
+          AliasOK -> putStrLn "status=ok"
+          AliasPendingFetch h -> putStrLn ("status=pending_fetch " <> show h)
+  CmdAliasList mSpaceName mTopicName -> do
+    (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
+    let topic = fromMaybe defaultAliasTopic mTopicName
+    msgs <- readTopicMsgsIfExists (spaceTopicPath spaceDir topic)
+    casSet <- loadCasSetFrom (spaceCasDir spaceDir)
+    let st = foldl' insertMsg emptyStore msgs
+        (aliases, qs) = resolveAliases casSet st (scRealm spaceCfg) topic
+    putStrLn ("quarantine=" <> show (length qs))
+    forM_ (sortOn fst (M.toList aliases)) $ \(logicalId, ae) ->
+      case aeStatus ae of
+        AliasOK ->
+          putStrLn (T.unpack logicalId <> "\ttarget=" <> show (aeTarget ae) <> "\tstatus=ok")
+        AliasPendingFetch h ->
+          putStrLn (T.unpack logicalId <> "\ttarget=" <> show (aeTarget ae) <> "\tstatus=pending_fetch " <> show h)
+  CmdXform label mSpaceName inputSpecs outputSpecs mToolRaw mParamsFile mReceiptFile mTopicName -> do
+    when (null inputSpecs) $
+      fail "xform requires at least one --input"
+    when (null outputSpecs) $
+      fail "xform requires at least one --output"
+    (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
+    memberCfg <- loadActiveMemberKey spaceDir spaceCfg
+    let topic = fromMaybe (scDefaultTopic spaceCfg) mTopicName
+    inputHashes <- traverse (resolveArtifactSpecInSpace spaceDir) inputSpecs
+    outputHashes <- traverse (resolveArtifactSpecInSpace spaceDir) outputSpecs
+    paramsHash <- maybe (pure emptyBlobHash) (fmap mhBlob . BS.readFile) mParamsFile
+    recipeHash <- maybe (pure emptyBlobHash) (fmap mhBlob . BS.readFile) mReceiptFile
+    msgs <- readTopicMsgsIfExists (spaceTopicPath spaceDir topic)
+    let st = foldl' insertMsg emptyStore msgs
+        (verified, bad) = topicReplay st (scRealm spaceCfg) topic
+    when (not (null bad)) $
+      fail ("topic has rejected messages: " <> T.unpack topic)
+    let prevHash = fst <$> lastMay verified
+        nextT = maybe 1 ((+ 1) . unTm . mT . snd) (lastMay verified)
+        toolHash = maybe (mhBlob (TE.encodeUtf8 label)) Hash mToolRaw
+        unsigned =
+          Msg
+            { mV = ftfProtocolVersion
+            , mRealm = scRealm spaceCfg
+            , mTopic = topic
+            , mPrev = prevHash
+            , mT = Tm nextT
+            , mAuthor = mkPk memberCfg
+            , mCaps = []
+            , mBody =
+                Xform
+                  XformBody
+                    { xfToolId = toolHash
+                    , xfToolVersion = label
+                    , xfParamsHash = paramsHash
+                    , xfInputs = inputHashes
+                    , xfOutputs = outputHashes
+                    , xfRecipeHash = recipeHash
+                    , xfEnvHash = emptyBlobHash
+                    }
+            , mWitness = Nothing
+            , mSig = Sig BS.empty
+            }
+    sk <- either (fail . T.unpack) pure (parseSecretKey (mkSk memberCfg))
+    let signed = setSig (signMh sk (mhMsg unsigned)) unsigned
+    appendMsgToTopicFile (spaceTopicPath spaceDir topic) signed
+    putStrLn ("event:    " <> show (mhMsg signed))
+    putStrLn ("topic:    " <> T.unpack topic)
+    forM_ outputHashes $ \h ->
+      putStrLn ("output:   " <> show h)
+  CmdPut path mSpaceName mTopicName -> do
+    (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
+    memberCfg <- loadActiveMemberKey spaceDir spaceCfg
+    bytes <- BS.readFile path
+    let artifactHash = mhBlob bytes
+        topic = fromMaybe (scDefaultTopic spaceCfg) mTopicName
+    casPutAt (spaceCasDir spaceDir) artifactHash bytes
+    msgs <- readTopicMsgsIfExists (spaceTopicPath spaceDir topic)
+    let st = foldl' insertMsg emptyStore msgs
+        (verified, bad) = topicReplay st (scRealm spaceCfg) topic
+    when (not (null bad)) $
+      fail ("topic has rejected messages: " <> T.unpack topic)
+    let prevHash = fst <$> lastMay verified
+        nextT = maybe 1 ((+ 1) . unTm . mT . snd) (lastMay verified)
+    sk <- either (fail . T.unpack) pure (parseSecretKey (mkSk memberCfg))
+    let msgHash = mhMsg unsigned
+        unsigned =
+          Msg
+            { mV = ftfProtocolVersion
+            , mRealm = scRealm spaceCfg
+            , mTopic = topic
+            , mPrev = prevHash
+            , mT = Tm nextT
+            , mAuthor = mkPk memberCfg
+            , mCaps = []
+            , mBody = Put (PutBody artifactHash)
+            , mWitness = Nothing
+            , mSig = Sig BS.empty
+            }
+        signed = setSig (signMh sk msgHash) unsigned
+    appendMsgToTopicFile (spaceTopicPath spaceDir topic) signed
+    putStrLn ("artifact: " <> show artifactHash)
+    putStrLn ("event:    " <> show (mhMsg signed))
+    putStrLn ("topic:    " <> T.unpack topic)
   CmdHashMsg fp -> do
     m <- readOneMsg fp
     putStrLn (show (mhMsg m))
@@ -852,7 +1254,7 @@ run = \case
     when (sigActual /= sigExpected) $
       fail ("sig mismatch: expected " <> BSC.unpack (toHex sigExpected) <> ", got " <> BSC.unpack (toHex sigActual))
     putStrLn "selftest=ok"
-  CmdTrace realm topic rootRaw fp -> do
+  CmdTraceLegacy realm topic rootRaw fp -> do
     msgs <- readMsgs fp
     let st = foldl' insertMsg emptyStore msgs
         (verified, _) = topicReplay st realm topic
@@ -861,6 +1263,19 @@ run = \case
     let gi = indexVerifiedMsgs verified
         root = Hash rootRaw
     casSet <- loadCasSet
+    out <- either (fail . T.unpack) pure (buildTrace casSet gi root)
+    forM_ out $ \v -> BSC.putStrLn (BL.toStrict (A.encode v))
+  CmdTraceSpace mSpaceName mTopicName rootSpec -> do
+    (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
+    let topic = fromMaybe (scDefaultTopic spaceCfg) mTopicName
+    msgs <- readTopicMsgsIfExists (spaceTopicPath spaceDir topic)
+    let st = foldl' insertMsg emptyStore msgs
+        (verified, _) = topicReplay st (scRealm spaceCfg) topic
+    when (null verified) $
+      fail "no verified messages for space/topic"
+    let gi = indexVerifiedMsgs verified
+    root <- resolveTraceRootInSpace spaceDir spaceCfg rootSpec
+    casSet <- loadCasSetFrom (spaceCasDir spaceDir)
     out <- either (fail . T.unpack) pure (buildTrace casSet gi root)
     forM_ out $ \v -> BSC.putStrLn (BL.toStrict (A.encode v))
   CmdCasPut path -> do
@@ -935,19 +1350,37 @@ toHex = convertToBase Base16
 fromHex :: BS.ByteString -> Either String BS.ByteString
 fromHex = first show . convertFromBase Base16
 
+ftfRoot :: FilePath
+ftfRoot = ".ftf"
+
+appConfigPath :: FilePath
+appConfigPath = ftfRoot </> "config.json"
+
+spacesRoot :: FilePath
+spacesRoot = ftfRoot </> "spaces"
+
+defaultAliasTopic :: Topic
+defaultAliasTopic = "alias/main"
+
 casRoot :: FilePath
 casRoot = ".ftf/cas"
 
+casPathUnder :: FilePath -> Hash -> FilePath
+casPathUnder root h = root </> BSC.unpack (toHex (unHash h))
+
 casPath :: Hash -> FilePath
-casPath h = casRoot </> BSC.unpack (toHex (unHash h))
+casPath = casPathUnder casRoot
+
+ensureCasDirAt :: FilePath -> IO ()
+ensureCasDirAt = createDirectoryIfMissing True
 
 ensureCasDir :: IO ()
-ensureCasDir = createDirectoryIfMissing True casRoot
+ensureCasDir = ensureCasDirAt casRoot
 
-casPut :: Hash -> BS.ByteString -> IO ()
-casPut h bytes = do
-  ensureCasDir
-  let p = casPath h
+casPutAt :: FilePath -> Hash -> BS.ByteString -> IO ()
+casPutAt root h bytes = do
+  ensureCasDirAt root
+  let p = casPathUnder root h
   exists <- doesFileExist p
   if exists
     then do
@@ -955,24 +1388,225 @@ casPut h bytes = do
       when (old /= bytes) (fail ("CAS collision at " <> p))
     else BS.writeFile p bytes
 
-casHas :: Hash -> IO Bool
-casHas h = doesFileExist (casPath h)
+casPut :: Hash -> BS.ByteString -> IO ()
+casPut = casPutAt casRoot
 
-casGet :: Hash -> IO (Maybe BS.ByteString)
-casGet h = do
-  let p = casPath h
+casHasAt :: FilePath -> Hash -> IO Bool
+casHasAt root h = doesFileExist (casPathUnder root h)
+
+casHas :: Hash -> IO Bool
+casHas = casHasAt casRoot
+
+casGetAt :: FilePath -> Hash -> IO (Maybe BS.ByteString)
+casGetAt root h = do
+  let p = casPathUnder root h
   exists <- doesFileExist p
   if exists then Just <$> BS.readFile p else pure Nothing
 
-loadCasSet :: IO (Set Hash)
-loadCasSet = do
-  exists <- doesDirectoryExist casRoot
+casGet :: Hash -> IO (Maybe BS.ByteString)
+casGet = casGetAt casRoot
+
+loadCasSetFrom :: FilePath -> IO (Set Hash)
+loadCasSetFrom root = do
+  exists <- doesDirectoryExist root
   if not exists
     then pure S.empty
     else do
-      names <- listDirectory casRoot
+      names <- listDirectory root
       let parsed = map (fromHex . TE.encodeUtf8 . T.pack) names
       pure (S.fromList [Hash b | Right b <- parsed])
+
+loadCasSet :: IO (Set Hash)
+loadCasSet = loadCasSetFrom casRoot
+
+defaultSpacePath :: Text -> FilePath
+defaultSpacePath name = spacesRoot </> T.unpack name
+
+spaceConfigPath :: FilePath -> FilePath
+spaceConfigPath spaceDir = spaceDir </> "space.json"
+
+spaceTopicsDir :: FilePath -> FilePath
+spaceTopicsDir spaceDir = spaceDir </> "topics"
+
+spaceCasDir :: FilePath -> FilePath
+spaceCasDir spaceDir = spaceDir </> "cas"
+
+spaceKeysDir :: FilePath -> FilePath
+spaceKeysDir spaceDir = spaceDir </> "keys"
+
+spaceOwnerKeyPath :: FilePath -> FilePath
+spaceOwnerKeyPath spaceDir = spaceKeysDir spaceDir </> "owner.json"
+
+spaceMemberKeyPath :: FilePath -> Text -> FilePath
+spaceMemberKeyPath spaceDir member = spaceKeysDir spaceDir </> T.unpack member <.> "json"
+
+spaceTopicPath :: FilePath -> Topic -> FilePath
+spaceTopicPath spaceDir topic =
+  let segments = map T.unpack (T.splitOn "/" topic)
+   in foldl (</>) (spaceTopicsDir spaceDir) (init segments) </> last segments <.> "ndjson"
+
+setActiveSpaceIfUnset :: Text -> IO ()
+setActiveSpaceIfUnset name = do
+  createDirectoryIfMissing True ftfRoot
+  exists <- doesFileExist appConfigPath
+  if not exists
+    then BL.writeFile appConfigPath (A.encode (AppConfig (Just name)))
+    else do
+      raw <- BSC.readFile appConfigPath
+      cfg <- case A.eitherDecodeStrict' raw of
+        Left e -> fail ("invalid app config at " <> appConfigPath <> ": " <> e)
+        Right v -> pure v
+      case acActiveSpace cfg of
+        Just _ -> pure ()
+        Nothing -> BL.writeFile appConfigPath (A.encode (cfg {acActiveSpace = Just name}))
+
+loadSpaceConfig :: Text -> IO SpaceConfig
+loadSpaceConfig name = do
+  let path = spaceConfigPath (defaultSpacePath name)
+  exists <- doesFileExist path
+  when (not exists) $
+    fail ("space not found: " <> T.unpack name)
+  raw <- BSC.readFile path
+  case A.eitherDecodeStrict' raw of
+    Left e -> fail ("invalid space config at " <> path <> ": " <> e)
+    Right cfg -> pure cfg
+
+writeSpaceConfig :: FilePath -> SpaceConfig -> IO ()
+writeSpaceConfig spaceDir cfg =
+  BL.writeFile (spaceConfigPath spaceDir) (A.encode cfg)
+
+loadAppConfig :: IO AppConfig
+loadAppConfig = do
+  exists <- doesFileExist appConfigPath
+  if not exists
+    then pure (AppConfig Nothing)
+    else do
+      raw <- BSC.readFile appConfigPath
+      case A.eitherDecodeStrict' raw of
+        Left e -> fail ("invalid app config at " <> appConfigPath <> ": " <> e)
+        Right cfg -> pure cfg
+
+resolveSpaceSelection :: Maybe Text -> IO (FilePath, SpaceConfig)
+resolveSpaceSelection mName = do
+  name <-
+    case mName of
+      Just n -> pure n
+      Nothing -> do
+        appCfg <- loadAppConfig
+        case acActiveSpace appCfg of
+          Just n -> pure n
+          Nothing -> fail "no active space configured; pass --space NAME"
+  let spaceDir = defaultSpacePath name
+  cfg <- loadSpaceConfig name
+  pure (spaceDir, cfg)
+
+loadActiveMemberKey :: FilePath -> SpaceConfig -> IO MemberKeyConfig
+loadActiveMemberKey spaceDir spaceCfg = do
+  loadMemberKeyByName spaceDir (scActiveMember spaceCfg)
+
+loadMemberKeyByName :: FilePath -> Text -> IO MemberKeyConfig
+loadMemberKeyByName spaceDir memberName = do
+  let path = spaceMemberKeyPath spaceDir memberName
+  exists <- doesFileExist path
+  when (not exists) $
+    fail ("active member key not found: " <> path)
+  raw <- BSC.readFile path
+  case A.eitherDecodeStrict' raw of
+    Left e -> fail ("invalid member key at " <> path <> ": " <> e)
+    Right cfg -> pure cfg
+
+resolveDeriveTarget :: Maybe Text -> Maybe Text -> IO (Text, Text)
+resolveDeriveTarget mPath mRole =
+  case (mPath, mRole) of
+    (Just _, Just _) -> fail "pass either --path or --role, not both"
+    (Nothing, Nothing) -> fail "missing derivation target; pass --path or --role"
+    (Just p, Nothing) -> pure (p, memberNameFromPath p)
+    (Nothing, Just role) ->
+      case roleDerivationPath role of
+        Nothing -> fail ("unknown role: " <> T.unpack role)
+        Just p -> pure (p, role)
+
+roleDerivationPath :: Text -> Maybe Text
+roleDerivationPath role =
+  M.lookup role $
+    M.fromList
+      [ ("owner", "m/0")
+      , ("operator", "m/1")
+      , ("auditor", "m/2")
+      , ("writer", "m/3")
+      , ("reader", "m/4")
+      , ("relay", "m/5")
+      , ("bot", "m/6")
+      ]
+
+memberNameFromPath :: Text -> Text
+memberNameFromPath path =
+  let raw = T.map normalize path
+      trimmed = T.dropAround (== '-') raw
+   in if T.null trimmed then "derived" else "derived-" <> trimmed
+ where
+  normalize c
+    | c >= 'a' && c <= 'z' = c
+    | c >= 'A' && c <= 'Z' = c
+    | c >= '0' && c <= '9' = c
+    | otherwise = '-'
+
+emptyBlobHash :: Hash
+emptyBlobHash = mhBlob BS.empty
+
+resolveArtifactSpecInSpace :: FilePath -> Text -> IO Hash
+resolveArtifactSpecInSpace spaceDir spec = do
+  let candidatePath = T.unpack spec
+  pathExists <- doesFileExist candidatePath
+  if pathExists
+    then do
+      bytes <- BS.readFile candidatePath
+      let h = mhBlob bytes
+      casPutAt (spaceCasDir spaceDir) h bytes
+      pure h
+    else
+      case fromHex (TE.encodeUtf8 spec) of
+        Right raw -> pure (Hash raw)
+        Left _ -> fail ("unable to resolve artifact spec: " <> T.unpack spec)
+
+resolveTraceRootInSpace :: FilePath -> SpaceConfig -> Text -> IO Hash
+resolveTraceRootInSpace spaceDir spaceCfg rootSpec = do
+  let candidatePath = T.unpack rootSpec
+  pathExists <- doesFileExist candidatePath
+  if pathExists
+    then mhBlob <$> BS.readFile candidatePath
+    else do
+      msgs <- readTopicMsgsIfExists (spaceTopicPath spaceDir defaultAliasTopic)
+      casSet <- loadCasSetFrom (spaceCasDir spaceDir)
+      let st = foldl' insertMsg emptyStore msgs
+          (aliases, _) = resolveAliases casSet st (scRealm spaceCfg) defaultAliasTopic
+      case lookupAlias aliases rootSpec of
+        Just ae -> pure (aeTarget ae)
+        Nothing ->
+          case fromHex (TE.encodeUtf8 rootSpec) of
+            Right raw -> pure (Hash raw)
+            Left _ -> fail ("unable to resolve trace root: " <> T.unpack rootSpec)
+
+readTopicMsgsIfExists :: FilePath -> IO [Msg]
+readTopicMsgsIfExists path = do
+  exists <- doesFileExist path
+  if exists then readMsgs path else pure []
+
+appendMsgToTopicFile :: FilePath -> Msg -> IO ()
+appendMsgToTopicFile path msg = do
+  createDirectoryIfMissing True (takeDirectory path)
+  BSC.appendFile path (BL.toStrict (A.encode msg) <> "\n")
+
+lastMay :: [a] -> Maybe a
+lastMay [] = Nothing
+lastMay xs = Just (last xs)
+
+countDirectoryEntries :: FilePath -> IO Int
+countDirectoryEntries path = do
+  exists <- doesDirectoryExist path
+  if not exists
+    then pure 0
+    else length <$> listDirectory path
 
 mhBlob :: BS.ByteString -> Hash
 mhBlob bytes =
@@ -990,6 +1624,37 @@ requireFile :: FilePath -> IO ()
 requireFile fp = do
   ok <- doesFileExist fp
   when (not ok) (fail ("missing required file: " <> fp))
+
+instance A.FromJSON AppConfig where
+  parseJSON = A.withObject "AppConfig" $ \o ->
+    AppConfig <$> o .:? "active_space"
+
+instance A.FromJSON SpaceConfig where
+  parseJSON = A.withObject "SpaceConfig" $ \o ->
+    SpaceConfig
+      <$> o .: "name"
+      <*> o .: "realm"
+      <*> o .: "space_id"
+      <*> o .: "created_at"
+      <*> o .: "root_pubkey"
+      <*> o .: "default_topic"
+      <*> o .: "active_member"
+
+instance A.FromJSON MemberKeyConfig where
+  parseJSON = A.withObject "MemberKeyConfig" $ \o ->
+    MemberKeyConfig
+      <$> o .: "member"
+      <*> o .: "pk"
+      <*> (do
+            skText <- o .: "sk"
+            either fail pure (fromHex (TE.encodeUtf8 skText))
+          )
+
+instance A.ToJSON AppConfig where
+  toJSON cfg =
+    A.object
+      [ "active_space" A..= acActiveSpace cfg
+      ]
 
 instance A.ToJSON Hash where
   toJSON = A.String . TE.decodeUtf8 . toHex . unHash
@@ -1016,6 +1681,18 @@ instance A.ToJSON Msg where
       , "body" A..= mBody m
       , "witness" A..= mWitness m
       , "sig" A..= mSig m
+      ]
+
+instance A.ToJSON SpaceConfig where
+  toJSON sc =
+    A.object
+      [ "name" A..= scName sc
+      , "realm" A..= scRealm sc
+      , "space_id" A..= scSpaceID sc
+      , "created_at" A..= scCreatedAt sc
+      , "root_pubkey" A..= scRootPubkey sc
+      , "default_topic" A..= scDefaultTopic sc
+      , "active_member" A..= scActiveMember sc
       ]
 
 instance A.ToJSON Body where
