@@ -178,6 +178,8 @@ ftf alias set <logical-id> <artifact_mh_hex> [--space <name>] [--topic <topic>]
 ftf alias get <logical-id> [--space <name>] [--topic <topic>]
 ftf alias ls [--space <name>] [--topic <topic>]
 ftf xform <label> --space <name> --input <hash-or-path> --output <hash-or-path> [--tool <mh>] [--params <file>] [--receipt <file>] [--topic <topic>]
+ftf attest <hash-or-alias-or-path> --space <name> --claim <claim> [--evidence <mh>] [--evidence-file <path>] [--topic <topic>]
+ftf revoke <hash-or-alias-or-path> --space <name> --reason <reason> [--superseded-by <mh>] [--topic <topic>]
 ftf put <path> --space <name> [--topic <topic>]
 ftf trace [--space <name>] [--topic <topic>] <hash-or-alias-or-path>
 ```
@@ -187,9 +189,10 @@ This creates local space scaffolding with `space.json`, `topics/`, `cas/`,
 readback/listing of local spaces, supports deterministic member-key
 derivation from the space root identity, supports switching the active
 local signer, can append/resolve alias claims in a space-local alias
-topic, can append signed `put` and `xform` events in the space topic
-log, and can inspect lineage by path/alias/hash. In space mode, `trace`
-resolves targets in this order: path, alias, then raw multihash hex.
+topic, can append signed `put`, `xform`, `attest`, and `revoke` events
+in the space topic log, and can inspect lineage by path/alias/hash. In
+space mode, `trace` resolves targets in this order: path, alias, then
+raw multihash hex.
 
 ## Proof Receipts
 

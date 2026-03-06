@@ -35,3 +35,9 @@ Related model note: [CATEGORY.md](/root/psync/docs/CATEGORY.md)
 - Establishes: Rust verifier parity for full body-kind wire projection (`put/use/xform/attest/revoke`) against Haskell-signed stream.
 - Command: `bash verify-wire.sh` (full-body segment: `verify-topic ftf provenance/fullbody`)
 - Latest: [fullbody-rust-conformance.latest.md](/root/psync/docs/proofs/fullbody-rust-conformance.latest.md)
+
+### Spaces Workflow
+
+- Establishes: bounded space-local workflow semantics for `put`, `xform`, `attest`, `revoke`, `alias`, and `trace` under active-member signing.
+- Command: `bash scripts/smoke-space-new.sh`
+- Latest: [spaces-workflow.latest.md](/root/psync/docs/proofs/spaces-workflow.latest.md)

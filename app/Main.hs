@@ -739,6 +739,8 @@ data Cmd
   | CmdAliasGet Text (Maybe Text) (Maybe Topic)
   | CmdAliasList (Maybe Text) (Maybe Topic)
   | CmdXform Text (Maybe Text) [Text] [Text] (Maybe BS.ByteString) (Maybe FilePath) (Maybe FilePath) (Maybe Topic)
+  | CmdAttest Text Text (Maybe Text) [BS.ByteString] [FilePath] (Maybe Topic)
+  | CmdRevoke Text Text (Maybe BS.ByteString) (Maybe Text) (Maybe Topic)
   | CmdPut FilePath (Maybe Text) (Maybe Topic)
   | CmdHashMsg FilePath
   | CmdSignMsg BS.ByteString FilePath
@@ -770,6 +772,12 @@ cmdParser =
         <> OA.command
           "xform"
           (OA.info xformP (OA.progDesc "Append a signed xform event in a space"))
+        <> OA.command
+          "attest"
+          (OA.info attestP (OA.progDesc "Append a signed attest note in a space"))
+        <> OA.command
+          "revoke"
+          (OA.info revokeP (OA.progDesc "Append a signed revoke note in a space"))
         <> OA.command
           "put"
           (OA.info putP (OA.progDesc "Store a blob in a space CAS and append a signed put event"))
@@ -891,6 +899,27 @@ cmdParser =
           (OA.long "tool" <> OA.metavar "TOOL_MH_HEX"))
       <*> OA.optional (OA.strOption (OA.long "params" <> OA.metavar "FILE"))
       <*> OA.optional (OA.strOption (OA.long "receipt" <> OA.metavar "FILE"))
+      <*> OA.optional (OA.option OA.str (OA.long "topic" <> OA.metavar "TOPIC"))
+  attestP =
+    CmdAttest
+      <$> fmap T.pack (OA.strArgument (OA.metavar "HASH_OR_ALIAS_OR_PATH"))
+      <*> OA.option OA.str (OA.long "claim" <> OA.metavar "CLAIM")
+      <*> OA.optional (OA.option OA.str (OA.long "space" <> OA.metavar "NAME"))
+      <*> OA.many
+        (OA.option
+          (OA.eitherReader (\s -> fromHex (TE.encodeUtf8 (T.pack s))))
+          (OA.long "evidence" <> OA.metavar "MH_HEX"))
+      <*> OA.many (OA.strOption (OA.long "evidence-file" <> OA.metavar "FILE"))
+      <*> OA.optional (OA.option OA.str (OA.long "topic" <> OA.metavar "TOPIC"))
+  revokeP =
+    CmdRevoke
+      <$> fmap T.pack (OA.strArgument (OA.metavar "HASH_OR_ALIAS_OR_PATH"))
+      <*> OA.option OA.str (OA.long "reason" <> OA.metavar "REASON")
+      <*> OA.optional
+        (OA.option
+          (OA.eitherReader (\s -> fromHex (TE.encodeUtf8 (T.pack s))))
+          (OA.long "superseded-by" <> OA.metavar "MH_HEX"))
+      <*> OA.optional (OA.option OA.str (OA.long "space" <> OA.metavar "NAME"))
       <*> OA.optional (OA.option OA.str (OA.long "topic" <> OA.metavar "TOPIC"))
   putP =
     CmdPut
@@ -1176,6 +1205,72 @@ run = \case
     putStrLn ("topic:    " <> T.unpack topic)
     forM_ outputHashes $ \h ->
       putStrLn ("output:   " <> show h)
+  CmdAttest targetSpec claim mSpaceName evidenceRaws evidenceFiles mTopicName -> do
+    (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
+    memberCfg <- loadActiveMemberKey spaceDir spaceCfg
+    let topic = fromMaybe (scDefaultTopic spaceCfg) mTopicName
+    aboutHash <- resolveTraceRootInSpace spaceDir spaceCfg targetSpec
+    evidenceFileHashes <- traverse (resolveArtifactSpecInSpace spaceDir . T.pack) evidenceFiles
+    let evidenceHashes = map Hash evidenceRaws ++ evidenceFileHashes
+    msgs <- readTopicMsgsIfExists (spaceTopicPath spaceDir topic)
+    let st = foldl' insertMsg emptyStore msgs
+        (verified, bad) = topicReplay st (scRealm spaceCfg) topic
+    when (not (null bad)) $
+      fail ("topic has rejected messages: " <> T.unpack topic)
+    let prevHash = fst <$> lastMay verified
+        nextT = maybe 1 ((+ 1) . unTm . mT . snd) (lastMay verified)
+        unsigned =
+          Msg
+            { mV = ftfProtocolVersion
+            , mRealm = scRealm spaceCfg
+            , mTopic = topic
+            , mPrev = prevHash
+            , mT = Tm nextT
+            , mAuthor = mkPk memberCfg
+            , mCaps = []
+            , mBody = Attest (AttestBody aboutHash claim evidenceHashes)
+            , mWitness = Nothing
+            , mSig = Sig BS.empty
+            }
+    sk <- either (fail . T.unpack) pure (parseSecretKey (mkSk memberCfg))
+    let signed = setSig (signMh sk (mhMsg unsigned)) unsigned
+    appendMsgToTopicFile (spaceTopicPath spaceDir topic) signed
+    putStrLn ("about:    " <> show aboutHash)
+    putStrLn ("claim:    " <> T.unpack claim)
+    putStrLn ("event:    " <> show (mhMsg signed))
+    putStrLn ("topic:    " <> T.unpack topic)
+  CmdRevoke targetSpec reason mSupersededRaw mSpaceName mTopicName -> do
+    (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
+    memberCfg <- loadActiveMemberKey spaceDir spaceCfg
+    let topic = fromMaybe (scDefaultTopic spaceCfg) mTopicName
+    targetHash <- resolveTraceRootInSpace spaceDir spaceCfg targetSpec
+    msgs <- readTopicMsgsIfExists (spaceTopicPath spaceDir topic)
+    let st = foldl' insertMsg emptyStore msgs
+        (verified, bad) = topicReplay st (scRealm spaceCfg) topic
+    when (not (null bad)) $
+      fail ("topic has rejected messages: " <> T.unpack topic)
+    let prevHash = fst <$> lastMay verified
+        nextT = maybe 1 ((+ 1) . unTm . mT . snd) (lastMay verified)
+        unsigned =
+          Msg
+            { mV = ftfProtocolVersion
+            , mRealm = scRealm spaceCfg
+            , mTopic = topic
+            , mPrev = prevHash
+            , mT = Tm nextT
+            , mAuthor = mkPk memberCfg
+            , mCaps = []
+            , mBody = Revoke (RevokeBody targetHash reason (Hash <$> mSupersededRaw))
+            , mWitness = Nothing
+            , mSig = Sig BS.empty
+            }
+    sk <- either (fail . T.unpack) pure (parseSecretKey (mkSk memberCfg))
+    let signed = setSig (signMh sk (mhMsg unsigned)) unsigned
+    appendMsgToTopicFile (spaceTopicPath spaceDir topic) signed
+    putStrLn ("target:   " <> show targetHash)
+    putStrLn ("reason:   " <> T.unpack reason)
+    putStrLn ("event:    " <> show (mhMsg signed))
+    putStrLn ("topic:    " <> T.unpack topic)
   CmdPut path mSpaceName mTopicName -> do
     (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
     memberCfg <- loadActiveMemberKey spaceDir spaceCfg

@@ -148,6 +148,35 @@ grep -q "\"h\":\"$MODEL_HASH\"" <<<"$TRACE_MODEL_OUTPUT"
 grep -q "\"rel\":\"consumed_by\"" <<<"$TRACE_MODEL_OUTPUT"
 grep -q "\"rel\":\"produces\"" <<<"$TRACE_MODEL_OUTPUT"
 
+ATTEST_OUTPUT="$("$FTF_BIN" attest model.bin --space lab --claim reproduced)"
+printf '%s\n' "$ATTEST_OUTPUT"
+
+ATTEST_EVENT_HASH="$(sed -n 's/^event:    //p' <<<"$ATTEST_OUTPUT")"
+
+grep -q "^about:    $MODEL_HASH$" <<<"$ATTEST_OUTPUT"
+grep -q '^claim:    reproduced$' <<<"$ATTEST_OUTPUT"
+grep -q '^event:    1220' <<<"$ATTEST_OUTPUT"
+grep -q '^topic:    provenance/main$' <<<"$ATTEST_OUTPUT"
+test -n "$ATTEST_EVENT_HASH"
+grep -q "\"kind\":\"attest\"" .ftf/spaces/lab/topics/provenance/main.ndjson
+grep -q "\"about\":\"$MODEL_HASH\"" .ftf/spaces/lab/topics/provenance/main.ndjson
+grep -q "\"claim\":\"reproduced\"" .ftf/spaces/lab/topics/provenance/main.ndjson
+grep -q "\"author\":\"$AUDITOR_PK_1\"" .ftf/spaces/lab/topics/provenance/main.ndjson
+
+REVOKE_OUTPUT="$("$FTF_BIN" revoke "$XFORM_EVENT_HASH" --space lab --reason 'bad build')"
+printf '%s\n' "$REVOKE_OUTPUT"
+
+REVOKE_EVENT_HASH="$(sed -n 's/^event:    //p' <<<"$REVOKE_OUTPUT")"
+
+grep -q "^target:   $XFORM_EVENT_HASH$" <<<"$REVOKE_OUTPUT"
+grep -q '^reason:   bad build$' <<<"$REVOKE_OUTPUT"
+grep -q '^event:    1220' <<<"$REVOKE_OUTPUT"
+grep -q '^topic:    provenance/main$' <<<"$REVOKE_OUTPUT"
+test -n "$REVOKE_EVENT_HASH"
+grep -q "\"kind\":\"revoke\"" .ftf/spaces/lab/topics/provenance/main.ndjson
+grep -q "\"target\":\"$XFORM_EVENT_HASH\"" .ftf/spaces/lab/topics/provenance/main.ndjson
+grep -q "\"reason\":\"bad build\"" .ftf/spaces/lab/topics/provenance/main.ndjson
+
 ALIAS_SET_OUTPUT="$("$FTF_BIN" alias set model/latest "$MODEL_HASH" --space lab)"
 printf '%s\n' "$ALIAS_SET_OUTPUT"
 
@@ -179,6 +208,14 @@ TRACE_OUTPUT_ALIAS="$("$FTF_BIN" trace --space lab model/latest)"
 printf '%s\n' "$TRACE_OUTPUT_ALIAS"
 
 grep -q "\"root\":\"$MODEL_HASH\"" <<<"$TRACE_OUTPUT_ALIAS"
+grep -q "\"kind\":\"trace.note\"" <<<"$TRACE_OUTPUT_ALIAS"
+grep -q "\"note_type\":\"attest\"" <<<"$TRACE_OUTPUT_ALIAS"
+grep -q "\"claim\":\"reproduced\"" <<<"$TRACE_OUTPUT_ALIAS"
+grep -q "\"about\":\"artifact:$MODEL_HASH\"" <<<"$TRACE_OUTPUT_ALIAS"
+grep -q "\"note_type\":\"revoke\"" <<<"$TRACE_OUTPUT_ALIAS"
+grep -q "\"reason\":\"bad build\"" <<<"$TRACE_OUTPUT_ALIAS"
+grep -q "\"about\":\"event:$XFORM_EVENT_HASH\"" <<<"$TRACE_OUTPUT_ALIAS"
+grep -q "\"etype\":\"xform\"" <<<"$TRACE_OUTPUT_ALIAS"
 
 TRACE_OUTPUT_PATH="$("$FTF_BIN" trace --space lab model.bin)"
 printf '%s\n' "$TRACE_OUTPUT_PATH"
