@@ -19,7 +19,7 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isSpace)
 import Data.Foldable (foldl')
-import Data.List (sortOn)
+import Data.List (sortBy, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Map.Strict (Map)
 import Data.Maybe (fromMaybe, isJust)
@@ -363,7 +363,7 @@ appendMapList :: Ord k => k -> a -> Map k [a] -> Map k [a]
 appendMapList k v = M.alter f k
  where
   f Nothing = Just [v]
-  f (Just xs) = Just (xs ++ [v])
+  f (Just xs) = Just (v : xs)
 
 indexVerifiedMsgs :: [(Hash, Msg)] -> GraphIndex
 indexVerifiedMsgs = foldl' step emptyGraphIndex
@@ -544,91 +544,94 @@ buildTrace :: Set Hash -> GraphIndex -> Hash -> Either Text [A.Value]
 buildTrace casSet gi root =
   if not rootExists
     then Left "root artifact not found in verified put/xform outputs"
-    else Right (reverse finalOut)
+    else Right (header ++ artifactVals ++ eventVals ++ noteVals ++ edgeVals)
  where
   rootExists = isJust (M.lookup root (giPutByArtifact gi)) || isJust (M.lookup root (giXformsByOutput gi))
 
-  go pending seenArtifacts seenEvents edges notes out
-    | S.null pending = (seenArtifacts, seenEvents, edges, notes, out)
+  go pending seenArtifacts seenEvents eventMap edgeSet noteMap
+    | S.null pending = (seenArtifacts, seenEvents, eventMap, edgeSet, noteMap)
     | otherwise =
         let (h, pendingRest) = S.deleteFindMin pending
          in if S.member h seenArtifacts
-              then go pendingRest seenArtifacts seenEvents edges notes out
+              then go pendingRest seenArtifacts seenEvents eventMap edgeSet noteMap
               else
                 let seenArtifacts' = S.insert h seenArtifacts
-                    out1 = traceArtifact casSet h (h == root) : out
-                    producersX = M.findWithDefault [] h (giXformsByOutput gi)
-                    producers = if null producersX then M.findWithDefault [] h (giPutByArtifact gi) else producersX
-                    uses = M.findWithDefault [] h (giUseByInput gi)
-                    (pending2, seenEvents2, edges2, notes2, out2) =
+                    producersX = sortBy msgRefCmp (M.findWithDefault [] h (giXformsByOutput gi))
+                    producers = if null producersX then sortBy msgRefCmp (M.findWithDefault [] h (giPutByArtifact gi)) else producersX
+                    uses = sortBy msgRefCmp (M.findWithDefault [] h (giUseByInput gi))
+                    (pending2, seenEvents2, eventMap2, edgeSet2, noteMap2) =
                       foldl'
                         (processRef h)
-                        (pendingRest, seenEvents, edges, notes, out1)
+                        (pendingRest, seenEvents, eventMap, edgeSet, noteMap)
                         (producers ++ uses)
-                    (notes3, out3) = addAboutNotes (artifactRef h) h notes2 out2
-                 in go pending2 seenArtifacts' seenEvents2 edges2 notes3 out3
+                    noteMap3 = addAboutNotes (artifactRef h) h noteMap2
+                 in go pending2 seenArtifacts' seenEvents2 eventMap2 edgeSet2 noteMap3
 
-  processRef h (pending, seenEvents, edges, notes, out) ref =
+  processRef h (pending, seenEvents, eventMap, edgeSet, noteMap) ref =
     let eId = eventRef (mrHash ref)
         aId = artifactRef h
         isNewEvent = S.notMember (mrHash ref) seenEvents
         seenEvents' = S.insert (mrHash ref) seenEvents
-        out1 = if isNewEvent then msgRefToEventValue ref : out else out
-        (notes1, out2) = if isNewEvent then addAboutNotes eId (mrHash ref) notes out1 else (notes, out1)
-        (edges1, pending1, out3) =
+        eventMap' = if isNewEvent then M.insert (mrHash ref) ref eventMap else eventMap
+        noteMap' = if isNewEvent then addAboutNotes eId (mrHash ref) noteMap else noteMap
+        (edgeSet1, pending1) =
           case mrBody ref of
             Xform xb ->
-              let edgesA = S.insert (EdgeRec eId aId "produces") edges
+              let edgesA = S.insert (EdgeRec eId aId "produces") edgeSet
                   ins = sortOn unHash (xfInputs xb)
                   edgesB = foldl' (\acc i -> S.insert (EdgeRec (artifactRef i) eId "consumed_by") acc) edgesA ins
                   pending' = foldl' (flip S.insert) pending ins
-                  out' =
-                    foldl'
-                      (\acc i ->
-                         if S.member i casSet
-                           then acc
-                           else
-                             A.object
-                               [ "kind" A..= ("trace.note" :: Text)
-                               , "about" A..= artifactRef i
-                               , "note_type" A..= ("pending_fetch" :: Text)
-                               ]
-                               : acc
-                      )
-                      out2
-                      ins
-               in (edgesB, pending', out')
+               in (edgesB, pending')
             Put _ ->
-              (S.insert (EdgeRec eId aId "produces") edges, pending, out2)
+              (S.insert (EdgeRec eId aId "produces") edgeSet, pending)
             Use _ ->
-              (S.insert (EdgeRec aId eId "used_by") edges, pending, out2)
+              (S.insert (EdgeRec aId eId "used_by") edgeSet, pending)
             _ ->
-              (edges, pending, out2)
-     in (pending1, seenEvents', edges1, notes1, out3)
+              (edgeSet, pending)
+     in (pending1, seenEvents', eventMap', edgeSet1, noteMap')
 
-  addAboutNotes aboutLabel aboutHash noteSet out =
+  addAboutNotes aboutLabel aboutHash noteMap =
     let atts = M.findWithDefault [] aboutHash (giAttestByAbout gi)
         revs = M.findWithDefault [] aboutHash (giRevokeByTarget gi)
         refs = atts ++ revs
-     in foldl' addOne (noteSet, out) refs
+     in foldl' addOne noteMap refs
    where
-    addOne (ns, acc) ref =
+    addOne nm ref =
       let ntype = case mrBody ref of
             Attest _ -> "attest"
             Revoke _ -> "revoke"
             _ -> "note"
           key = (aboutLabel, ntype, mrHash ref)
-       in if S.member key ns
-            then (ns, acc)
+       in if M.member key nm
+            then nm
             else
-              let ns' = S.insert key ns
-                  nr = NoteRec aboutLabel ntype ref
-               in (ns', noteToValue nr : acc)
+              let nr = NoteRec aboutLabel ntype ref
+               in M.insert key nr nm
 
-  (_, _, edgeSet, _, outWithNodes) =
-    go (S.singleton root) S.empty S.empty S.empty S.empty [A.object ["kind" A..= ("trace.header" :: Text), "root" A..= hashText root, "version" A..= (1 :: Int)]]
+  (artifactSet, _, eventMapFinal, edgeSetFinal, noteMapFinal) =
+    go (S.singleton root) S.empty S.empty M.empty S.empty M.empty
 
-  finalOut = reverse (map traceEdge (S.toAscList edgeSet)) ++ outWithNodes
+  header = [A.object ["kind" A..= ("trace.header" :: Text), "root" A..= hashText root, "version" A..= (1 :: Int)]]
+  artifactVals =
+    map (\h -> traceArtifact casSet h (h == root)) (S.toAscList artifactSet)
+  eventVals =
+    map msgRefToEventValue (sortBy msgRefCmp (M.elems eventMapFinal))
+  noteVals =
+    map noteToValue (sortBy noteCmp (M.elems noteMapFinal))
+      ++ map pendingFetchNote (S.toAscList (S.filter (\h -> S.notMember h casSet) artifactSet))
+  edgeVals =
+    map traceEdge (S.toAscList edgeSetFinal)
+
+  noteCmp a b =
+    compare (mrT (nrRef a), unHash (mrHash (nrRef a)), nrAbout a, nrType a)
+            (mrT (nrRef b), unHash (mrHash (nrRef b)), nrAbout b, nrType b)
+
+  pendingFetchNote h =
+    A.object
+      [ "kind" A..= ("trace.note" :: Text)
+      , "about" A..= artifactRef h
+      , "note_type" A..= ("pending_fetch" :: Text)
+      ]
 
 instance A.FromJSON Hash where
   parseJSON = A.withText "Hash(hex)" $ \t ->
