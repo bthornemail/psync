@@ -46,6 +46,15 @@ newtype Tm = Tm {unTm :: Integer} deriving (Eq, Ord, Show)
 type Realm = Text
 type Topic = Text
 
+ftfCliVersion :: String
+ftfCliVersion = "0.1.0"
+
+ftfProtocolVersion :: Int
+ftfProtocolVersion = 1
+
+ftfMsgDomainTag :: BS.ByteString
+ftfMsgDomainTag = "ftf-msg-v1"
+
 instance Show Hash where
   show = BSC.unpack . toHex . unHash
 
@@ -197,7 +206,7 @@ encodeHashList hs =
     <> mconcat [Cbor.encodeBytes (unHash h) | h <- hs]
 
 domainPrefix :: BS.ByteString
-domainPrefix = "ftf-msg-v1\0"
+domainPrefix = BS.snoc ftfMsgDomainTag 0x00
 
 mhMsg :: Msg -> Hash
 mhMsg m =
@@ -696,7 +705,8 @@ instance A.FromJSON Body where
       _ -> fail ("unknown body.kind: " <> T.unpack kind)
 
 data Cmd
-  = CmdHashMsg FilePath
+  = CmdVersion
+  | CmdHashMsg FilePath
   | CmdSignMsg BS.ByteString FilePath
   | CmdGenKeypair
   | CmdSelfTest
@@ -711,6 +721,9 @@ cmdParser :: OA.Parser Cmd
 cmdParser =
   OA.hsubparser
     ( OA.command
+        "version"
+        (OA.info versionP (OA.progDesc "Print CLI and protocol version info"))
+        <> OA.command
         "hash-msg"
         (OA.info hashP (OA.progDesc "Hash one NDJSON message as multihash sha2-256"))
         <> OA.command
@@ -742,6 +755,7 @@ cmdParser =
           (OA.info resolveP (OA.progDesc "Resolve logical id from alias topic using deterministic replay"))
     )
  where
+  versionP = pure CmdVersion
   hashP = CmdHashMsg <$> OA.strArgument (OA.metavar "MSG.ndjson")
   signP =
     CmdSignMsg
@@ -789,6 +803,11 @@ main = do
 
 run :: Cmd -> IO ()
 run = \case
+  CmdVersion -> do
+    putStrLn ("ftf_cli_version=" <> ftfCliVersion)
+    putStrLn ("ftf_protocol_version=" <> show ftfProtocolVersion)
+    putStrLn ("ftf_msg_domain_tag=" <> BSC.unpack ftfMsgDomainTag)
+    putStrLn "ftf_preimage_prefix=ftf-msg-v1\\0"
   CmdHashMsg fp -> do
     m <- readOneMsg fp
     putStrLn (show (mhMsg m))

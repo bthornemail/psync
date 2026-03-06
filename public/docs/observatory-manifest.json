@@ -1,0 +1,59 @@
+{
+  "defaultTrace": "docs/trace/default-trace.json",
+  "proofs": [
+    {
+      "id": "README.md",
+      "title": "Proof Index",
+      "establishes": "Canonical overview of the proof receipt surface",
+      "command": "n/a",
+      "timestamp": "2026-03-06",
+      "summary": "Index of wire/trace/revoke/attest receipts",
+      "path": "docs/proofs/README.md"
+    },
+    {
+      "id": "wire-conformance.latest.md",
+      "title": "Wire Conformance",
+      "establishes": "Deterministic wire mechanics and Haskell ↔ Rust conformance",
+      "command": "bash verify-wire.sh",
+      "timestamp": "2026-03-06T03:02:18Z",
+      "summary": "[verify-wire] ok wire conformance",
+      "path": "docs/proofs/wire-conformance.latest.md"
+    },
+    {
+      "id": "trace-semantics.latest.md",
+      "title": "Trace Semantics",
+      "establishes": "Materialized vs pending_fetch semantics in deterministic trace output",
+      "command": "ftf trace --realm ftf --topic provenance/demo ...",
+      "timestamp": "2026-03-06T03:10:01Z",
+      "summary": "A=ok, U=pending_fetch, root=B ok",
+      "path": "docs/proofs/trace-semantics.latest.md"
+    },
+    {
+      "id": "revoke-semantics.latest.md",
+      "title": "Revoke Semantics",
+      "establishes": "Revoke as annotation; lineage preserved",
+      "command": "ftf trace --realm ftf --topic provenance/revoke-demo ...",
+      "timestamp": "2026-03-06T03:14:56Z",
+      "summary": "trace.note revoke present; no lineage deletion",
+      "path": "docs/proofs/revoke-semantics.latest.md"
+    },
+    {
+      "id": "attest-semantics.latest.md",
+      "title": "Attest Semantics",
+      "establishes": "Attest as positive evidence annotation",
+      "command": "ftf trace --realm ftf --topic provenance/attest-demo ...",
+      "timestamp": "2026-03-06T03:26:32Z",
+      "summary": "trace.note attest present with claim=reproduced",
+      "path": "docs/proofs/attest-semantics.latest.md"
+    },
+    {
+      "id": "fullbody-rust-conformance.latest.md",
+      "title": "Full Body Rust Conformance",
+      "establishes": "Rust verifier parity for put/use/xform/attest/revoke body kinds",
+      "command": "bash verify-wire.sh",
+      "timestamp": "2026-03-06T04:39:47Z",
+      "summary": "verify-topic provenance/fullbody -> verified=5, rejected=0",
+      "path": "docs/proofs/fullbody-rust-conformance.latest.md"
+    }
+  ]
+}
