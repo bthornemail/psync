@@ -23,7 +23,7 @@ import Data.Foldable (foldl')
 import Data.List (sortBy, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Map.Strict (Map)
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, maybeToList)
 import qualified Data.Set as S
 import Data.Set (Set)
 import Data.Text (Text)
@@ -1163,15 +1163,16 @@ run = \case
     (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
     memberCfg <- loadActiveMemberKey spaceDir spaceCfg
     let topic = fromMaybe (scDefaultTopic spaceCfg) mTopicName
-    inputHashes <- traverse (resolveArtifactSpecInSpace spaceDir) inputSpecs
-    outputHashes <- traverse (resolveArtifactSpecInSpace spaceDir) outputSpecs
-    paramsHash <- maybe (pure emptyBlobHash) (fmap mhBlob . BS.readFile) mParamsFile
-    recipeHash <- maybe (pure emptyBlobHash) (fmap mhBlob . BS.readFile) mReceiptFile
     msgs <- readTopicMsgsIfExists (spaceTopicPath spaceDir topic)
     let st = foldl' insertMsg emptyStore msgs
         (verified, bad) = topicReplay st (scRealm spaceCfg) topic
     when (not (null bad)) $
       fail ("topic has rejected messages: " <> T.unpack topic)
+    let knownTargets = knownTargetHashes verified
+    inputHashes <- traverse (resolveInputSpecInSpace spaceDir knownTargets) inputSpecs
+    outputHashes <- traverse (resolveArtifactSpecInSpace spaceDir) outputSpecs
+    paramsHash <- maybe (pure emptyBlobHash) (fmap mhBlob . BS.readFile) mParamsFile
+    recipeHash <- maybe (pure emptyBlobHash) (fmap mhBlob . BS.readFile) mReceiptFile
     let prevHash = fst <$> lastMay verified
         nextT = maybe 1 ((+ 1) . unTm . mT . snd) (lastMay verified)
         toolHash = maybe (mhBlob (TE.encodeUtf8 label)) Hash mToolRaw
@@ -1209,14 +1210,17 @@ run = \case
     (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
     memberCfg <- loadActiveMemberKey spaceDir spaceCfg
     let topic = fromMaybe (scDefaultTopic spaceCfg) mTopicName
-    aboutHash <- resolveTraceRootInSpace spaceDir spaceCfg targetSpec
-    evidenceFileHashes <- traverse (resolveArtifactSpecInSpace spaceDir . T.pack) evidenceFiles
-    let evidenceHashes = map Hash evidenceRaws ++ evidenceFileHashes
     msgs <- readTopicMsgsIfExists (spaceTopicPath spaceDir topic)
     let st = foldl' insertMsg emptyStore msgs
         (verified, bad) = topicReplay st (scRealm spaceCfg) topic
     when (not (null bad)) $
       fail ("topic has rejected messages: " <> T.unpack topic)
+    let knownTargets = knownTargetHashes verified
+    aboutHash <- resolveTraceRootInSpace spaceDir spaceCfg targetSpec
+    when (S.notMember aboutHash knownTargets) $
+      fail ("target not found in verified space/topic: " <> show aboutHash)
+    evidenceFileHashes <- traverse (resolveArtifactSpecInSpace spaceDir . T.pack) evidenceFiles
+    let evidenceHashes = map Hash evidenceRaws ++ evidenceFileHashes
     let prevHash = fst <$> lastMay verified
         nextT = maybe 1 ((+ 1) . unTm . mT . snd) (lastMay verified)
         unsigned =
@@ -1243,12 +1247,15 @@ run = \case
     (spaceDir, spaceCfg) <- resolveSpaceSelection mSpaceName
     memberCfg <- loadActiveMemberKey spaceDir spaceCfg
     let topic = fromMaybe (scDefaultTopic spaceCfg) mTopicName
-    targetHash <- resolveTraceRootInSpace spaceDir spaceCfg targetSpec
     msgs <- readTopicMsgsIfExists (spaceTopicPath spaceDir topic)
     let st = foldl' insertMsg emptyStore msgs
         (verified, bad) = topicReplay st (scRealm spaceCfg) topic
     when (not (null bad)) $
       fail ("topic has rejected messages: " <> T.unpack topic)
+    let knownTargets = knownTargetHashes verified
+    targetHash <- resolveTraceRootInSpace spaceDir spaceCfg targetSpec
+    when (S.notMember targetHash knownTargets) $
+      fail ("target not found in verified space/topic: " <> show targetHash)
     let prevHash = fst <$> lastMay verified
         nextT = maybe 1 ((+ 1) . unTm . mT . snd) (lastMay verified)
         unsigned =
@@ -1663,6 +1670,40 @@ resolveArtifactSpecInSpace spaceDir spec = do
       case fromHex (TE.encodeUtf8 spec) of
         Right raw -> pure (Hash raw)
         Left _ -> fail ("unable to resolve artifact spec: " <> T.unpack spec)
+
+resolveInputSpecInSpace :: FilePath -> Set Hash -> Text -> IO Hash
+resolveInputSpecInSpace spaceDir knownTargets spec = do
+  let candidatePath = T.unpack spec
+  pathExists <- doesFileExist candidatePath
+  if pathExists
+    then do
+      bytes <- BS.readFile candidatePath
+      let h = mhBlob bytes
+      casPutAt (spaceCasDir spaceDir) h bytes
+      pure h
+    else
+      case fromHex (TE.encodeUtf8 spec) of
+        Right raw -> do
+          let h = Hash raw
+          localBlobExists <- doesFileExist (casPathUnder (spaceCasDir spaceDir) h)
+          if h `S.member` knownTargets || localBlobExists
+            then pure h
+            else fail ("input artifact not found in local space: " <> T.unpack spec)
+        Left _ -> fail ("unable to resolve artifact spec: " <> T.unpack spec)
+
+knownTargetHashes :: [(Hash, Msg)] -> Set Hash
+knownTargetHashes = foldl' step S.empty
+ where
+  step acc (h, m) =
+    S.insert h (foldl' (flip S.insert) acc (bodyTargets (mBody m)))
+
+  bodyTargets = \case
+    Put pb -> [putHash pb]
+    Use ub -> useInputs ub
+    Xform xb -> xfInputs xb ++ xfOutputs xb
+    Attest ab -> atAbout ab : atEvidence ab
+    Revoke rb -> rvTarget rb : maybeToList (rvSupersededBy rb)
+    AliasClaim ac -> [alTargetHash ac]
 
 resolveTraceRootInSpace :: FilePath -> SpaceConfig -> Text -> IO Hash
 resolveTraceRootInSpace spaceDir spaceCfg rootSpec = do

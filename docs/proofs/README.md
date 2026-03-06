@@ -41,3 +41,21 @@ Related model note: [CATEGORY.md](/root/psync/docs/CATEGORY.md)
 - Establishes: bounded space-local workflow semantics for `put`, `xform`, `attest`, `revoke`, `alias`, and `trace` under active-member signing.
 - Command: `bash scripts/smoke-space-new.sh`
 - Latest: [spaces-workflow.latest.md](/root/psync/docs/proofs/spaces-workflow.latest.md)
+
+### Spaces Must-Reject
+
+- Establishes: fail-closed behavior for space-local wrappers under unresolved targets, malformed evidence, unreachable revoke targets, and rejected topic replay state.
+- Command: bounded local must-reject scenario plus baseline `bash verify-wire.sh`
+- Latest: [spaces-must-reject.latest.md](/root/psync/docs/proofs/spaces-must-reject.latest.md)
+
+### Federated Handoff
+
+- Establishes: locality by default across spaces, with explicit interoperability only through a handoff artifact and no implicit global merge.
+- Command: bounded two-space local handoff scenario plus baseline `bash verify-wire.sh`
+- Latest: [federated-handoff.latest.md](/root/psync/docs/proofs/federated-handoff.latest.md)
+
+### Federated Must-Reject
+
+- Establishes: fail-closed federation boundary under no-reference-without-receipt, no-import-without-valid-receipt, and no-authority-without-local-grant.
+- Command: bounded negative two-space scenario plus baseline `bash verify-wire.sh`
+- Latest: [federated-must-reject.latest.md](/root/psync/docs/proofs/federated-must-reject.latest.md)

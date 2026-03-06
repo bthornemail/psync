@@ -54,6 +54,42 @@
       "timestamp": "2026-03-06T04:39:47Z",
       "summary": "verify-topic provenance/fullbody -> verified=5, rejected=0",
       "path": "docs/proofs/fullbody-rust-conformance.latest.md"
+    },
+    {
+      "id": "spaces-workflow.latest.md",
+      "title": "Spaces Workflow",
+      "establishes": "Bounded space-local workflow semantics for put/xform/attest/revoke/alias/trace under active-member signing",
+      "command": "bash scripts/smoke-space-new.sh",
+      "timestamp": "2026-03-06T20:14:59Z",
+      "summary": "space new -> identity derive/use -> put -> xform -> attest -> revoke -> alias set -> trace",
+      "path": "docs/proofs/spaces-workflow.latest.md"
+    },
+    {
+      "id": "spaces-must-reject.latest.md",
+      "title": "Spaces Must-Reject",
+      "establishes": "Fail-closed behavior for space-local attest/revoke wrappers and append guards",
+      "command": "bounded local must-reject scenario",
+      "timestamp": "2026-03-06T20:39:00Z",
+      "summary": "attest/revoke wrappers reject unresolved targets, malformed evidence, unreachable revoke targets, and appends against topics with rejected messages",
+      "path": "docs/proofs/spaces-must-reject.latest.md"
+    },
+    {
+      "id": "federated-handoff.latest.md",
+      "title": "Federated Handoff",
+      "establishes": "Locality by default across spaces, with explicit interoperability only through a handoff artifact",
+      "command": "bounded two-space local handoff scenario",
+      "timestamp": "2026-03-06T20:47:00Z",
+      "summary": "space alpha and space beta trace locally; cross-space relation exists only through an explicit handoff artifact",
+      "path": "docs/proofs/federated-handoff.latest.md"
+    },
+    {
+      "id": "federated-must-reject.latest.md",
+      "title": "Federated Must-Reject",
+      "establishes": "Fail-closed federation boundary for foreign references, malformed handoff imports, and foreign-local authority assumptions",
+      "command": "bounded negative two-space scenario",
+      "timestamp": "2026-03-06T21:05:00Z",
+      "summary": "no reference without receipt; no import without valid receipt; no authority without local grant",
+      "path": "docs/proofs/federated-must-reject.latest.md"
     }
   ]
 }
