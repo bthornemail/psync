@@ -1,0 +1,6 @@
+.cabal-ftf/
+dist-newstyle/
+.ftf/
+target/
+debug/
+deps/
