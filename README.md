@@ -62,6 +62,7 @@ Architecture/model docs:
 - [docs/CATEGORY.md](/root/psync/docs/CATEGORY.md)
 - [docs/ARCHITECTURE-BUNDLE.md](/root/psync/docs/ARCHITECTURE-BUNDLE.md)
 - [docs/FANO-CLOSURE.md](/root/psync/docs/FANO-CLOSURE.md)
+- [docs/topology-report-v0.md](/root/psync/docs/topology-report-v0.md)
 - [docs/releases/v0.1.0-design-rationale.md](/root/psync/docs/releases/v0.1.0-design-rationale.md)
 - [docs/v0.2.0-spaces-cli-spec.md](/root/psync/docs/v0.2.0-spaces-cli-spec.md)
 - [docs/cli/space-commands.md](/root/psync/docs/cli/space-commands.md)
