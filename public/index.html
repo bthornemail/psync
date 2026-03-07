@@ -1,46 +1,252 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Event Space</title>
-    <style>
-        html,
-        body {
-            height: 100%;
-            width: 100%;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .card {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto;
-            border: 2px solid black;
-            padding: 2rem;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FTF Observatory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
 </head>
-
 <body>
-    <div class="card">
-        Hello
-    </div>
-    <div class="card">
-        Hello
-    </div>
-    <div class="card">
-        Hello
-    </div>
-</body>
+  <div class="obs-shell">
+    <header class="obs-header">
+      <div class="title-wrap">
+        <h1>FTF Observatory</h1>
+        <p>Canonical CBOR. Append-only replay. Deterministic lineage.</p>
+      </div>
+      <div class="header-meta">
+        <span class="instrument-tag">sorted by (t, mh)</span>
+        <span class="instrument-tag">verified view</span>
+        <span class="instrument-tag">local CAS truth</span>
+      </div>
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" multiple accept=".json,.ndjson,.md,text/plain,application/json">
+        <strong>Drop NDJSON/JSON/MD</strong>
+        <span>Viewer-only load. No mutation.</span>
+      </label>
+    </header>
 
+    <main class="obs-main">
+      <aside class="left-rail">
+        <nav id="viewNav" class="view-nav" aria-label="Views">
+          <button class="view-tab is-active" data-view="verified">Verified View</button>
+          <button class="view-tab" data-view="aliases">Aliases</button>
+          <button class="view-tab" data-view="trace">Trace</button>
+          <button class="view-tab" data-view="artifacts">Artifacts</button>
+          <button class="view-tab" data-view="events">Events</button>
+          <button class="view-tab" data-view="proofs">Proof Receipts</button>
+          <button class="view-tab" data-view="wire">Wire Conformance</button>
+        </nav>
+
+        <section class="lens-panel">
+          <h2>Lens</h2>
+          <label>Realm
+            <input type="text" id="realmInput" value="ftf">
+          </label>
+          <label>Topic
+            <input type="text" id="topicInput" value="provenance/demo">
+          </label>
+          <label>Root Artifact
+            <input type="text" id="rootInput">
+          </label>
+          <label>View Mode
+            <select id="viewMode">
+              <option value="lineage">lineage</option>
+              <option value="replay">replay</option>
+              <option value="notes">notes</option>
+            </select>
+          </label>
+          <button id="applyLens" class="quiet-btn">Apply Lens</button>
+        </section>
+      </aside>
+
+      <section class="center-canvas">
+        <section class="view-panel is-active" id="view-verified">
+          <div class="panel-head">
+            <h2>Verified View</h2>
+            <p>Deterministic filtration of messages that satisfy signature/linkage/replay constraints.</p>
+          </div>
+          <div class="replay-strip" id="replayStrip"></div>
+          <details class="rejected-box">
+            <summary>Rejected Messages (<span id="rejectedCount">0</span>)</summary>
+            <div id="rejectedList"></div>
+          </details>
+        </section>
+
+        <section class="view-panel" id="view-aliases">
+          <div class="panel-head">
+            <h2>Alias View</h2>
+            <p>Name layer over canonical objects. Replay-driven, append-only.</p>
+          </div>
+          <div id="aliasChains" class="alias-chains"></div>
+        </section>
+
+        <section class="view-panel" id="view-trace">
+          <div class="panel-head">
+            <h2>Trace View</h2>
+            <p>Objects, morphisms, and notes in deterministic layout.</p>
+          </div>
+          <div class="root-banner" id="rootBanner"></div>
+          <div class="scrubber-wrap">
+            <label for="timelineScrubber">Replay Frontier <span id="scrubberLabel"></span></label>
+            <input type="range" id="timelineScrubber" min="0" max="1" value="1">
+          </div>
+          <div class="svg-wrap">
+            <svg id="traceSvg" viewBox="0 0 1200 620" role="img" aria-label="Lineage graph"></svg>
+          </div>
+        </section>
+
+        <section class="view-panel" id="view-artifacts">
+          <div class="panel-head">
+            <h2>Artifacts</h2>
+            <p>Inventory of objects with CAS materialization truth.</p>
+          </div>
+          <label class="search-row">Search
+            <input type="search" id="artifactSearch" placeholder="hash prefix / status">
+          </label>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Hash</th><th>Status</th><th>Produced By</th><th>Consumed By</th><th>First Seen t</th></tr>
+              </thead>
+              <tbody id="artifactTable"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view-panel" id="view-events">
+          <div class="panel-head">
+            <h2>Events</h2>
+            <p>Verified events sorted by (t, mh).</p>
+          </div>
+          <label class="search-row">Search
+            <input type="search" id="eventSearch" placeholder="kind / hash / author">
+          </label>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>t</th><th>Kind</th><th>Event Hash</th><th>Author</th><th>Summary</th></tr>
+              </thead>
+              <tbody id="eventTable"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view-panel" id="view-proofs">
+          <div class="panel-head">
+            <h2>Proof Receipts</h2>
+            <p>Constitutional evidence stack for wire and semantics.</p>
+          </div>
+          <div class="proof-layout">
+            <div id="proofCards" class="proof-cards"></div>
+            <article id="proofDoc" class="proof-doc">
+              <h3>Select a receipt</h3>
+              <pre></pre>
+            </article>
+          </div>
+        </section>
+
+        <section class="view-panel" id="view-wire">
+          <div class="panel-head">
+            <h2>Wire Conformance</h2>
+            <p>Haskell ↔ Rust wire check receipt.</p>
+          </div>
+          <article id="wireDoc" class="wire-doc"></article>
+        </section>
+      </section>
+
+      <aside class="right-inspector">
+        <div class="inspector-head">
+          <h2>Selected Record</h2>
+          <p id="selectionLabel">None selected</p>
+        </div>
+        <div class="inspector-tabs">
+          <button class="ins-tab is-active" data-pane="summary">Summary</button>
+          <button class="ins-tab" data-pane="raw">Raw JSON</button>
+          <button class="ins-tab" data-pane="notes">Notes</button>
+          <button class="ins-tab" data-pane="edges">Edges</button>
+        </div>
+        <section class="ins-pane is-active" id="ins-summary"></section>
+        <section class="ins-pane" id="ins-raw"><pre></pre></section>
+        <section class="ins-pane" id="ins-notes"></section>
+        <section class="ins-pane" id="ins-edges"></section>
+      </aside>
+    </main>
+  </div>
+
+  <script id="sample-trace" type="application/json">
+  {
+    "header": {"kind": "trace.header", "root": "12203b141272f804d1f47614d0c94206168215ef8f3cf2d43259ed45a4ce57f5693e", "version": 1},
+    "artifacts": [
+      {"kind":"trace.artifact","h":"12203b141272f804d1f47614d0c94206168215ef8f3cf2d43259ed45a4ce57f5693e","role":"root","status":"ok"},
+      {"kind":"trace.artifact","h":"1220b6d98a430f1af52dc21a12e90db407c13f91ad74b1637b8dafbbc53c5a84af39","role":"dependency","status":"ok"},
+      {"kind":"trace.artifact","h":"1220170cdb96825c9894f1a5d71c6d3bcfbeb9ab1b5191b2b017d113e7c386e2bfdc","role":"dependency","status":"pending_fetch"}
+    ],
+    "events": [
+      {"kind":"trace.event","etype":"put","mh":"122098f64bd5fcb4eb073ee5581329e0444c372ae678b57190091b4e19720f01df13","t":1,"author":"1eefa6ca348764473450f89ac8f2c06ff38d88617820493acf68ef7a0b0acb0f","artifact":"1220b6d98a430f1af52dc21a12e90db407c13f91ad74b1637b8dafbbc53c5a84af39"},
+      {"kind":"trace.event","etype":"xform","mh":"1220ab14dceaa1ab54e67728f6ac2201a223d38a50e790a74eaf8883136c68ee459e","t":2,"author":"1eefa6ca348764473450f89ac8f2c06ff38d88617820493acf68ef7a0b0acb0f","inputs":["1220b6d98a430f1af52dc21a12e90db407c13f91ad74b1637b8dafbbc53c5a84af39","1220170cdb96825c9894f1a5d71c6d3bcfbeb9ab1b5191b2b017d113e7c386e2bfdc"],"outputs":["12203b141272f804d1f47614d0c94206168215ef8f3cf2d43259ed45a4ce57f5693e"],"tool":"1220dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+    ],
+    "notes": [
+      {"kind":"trace.note","note_type":"attest","about":"event:1220ab14dceaa1ab54e67728f6ac2201a223d38a50e790a74eaf8883136c68ee459e","mh":"12205fd9bb3085813bbfc51c5a2d7b2880f9d87ba1801a514f9eb6057384e7ec5f71","t":3,"claim":"reproduced","author":"1eefa6ca348764473450f89ac8f2c06ff38d88617820493acf68ef7a0b0acb0f"},
+      {"kind":"trace.note","note_type":"revoke","about":"event:1220ab14dceaa1ab54e67728f6ac2201a223d38a50e790a74eaf8883136c68ee459e","mh":"1220558f02e9c1f483734cc13bbee243533ada6ba907a25e41e75575452a646ce4e3","t":4,"reason":"bounded-conformance-test","author":"1eefa6ca348764473450f89ac8f2c06ff38d88617820493acf68ef7a0b0acb0f"},
+      {"kind":"trace.note","note_type":"pending_fetch","about":"artifact:1220170cdb96825c9894f1a5d71c6d3bcfbeb9ab1b5191b2b017d113e7c386e2bfdc"}
+    ],
+    "edges": [
+      {"kind":"trace.edge","from":"event:122098f64bd5fcb4eb073ee5581329e0444c372ae678b57190091b4e19720f01df13","to":"artifact:1220b6d98a430f1af52dc21a12e90db407c13f91ad74b1637b8dafbbc53c5a84af39","rel":"produces"},
+      {"kind":"trace.edge","from":"artifact:1220b6d98a430f1af52dc21a12e90db407c13f91ad74b1637b8dafbbc53c5a84af39","to":"event:1220ab14dceaa1ab54e67728f6ac2201a223d38a50e790a74eaf8883136c68ee459e","rel":"consumed_by"},
+      {"kind":"trace.edge","from":"artifact:1220170cdb96825c9894f1a5d71c6d3bcfbeb9ab1b5191b2b017d113e7c386e2bfdc","to":"event:1220ab14dceaa1ab54e67728f6ac2201a223d38a50e790a74eaf8883136c68ee459e","rel":"consumed_by"},
+      {"kind":"trace.edge","from":"event:1220ab14dceaa1ab54e67728f6ac2201a223d38a50e790a74eaf8883136c68ee459e","to":"artifact:12203b141272f804d1f47614d0c94206168215ef8f3cf2d43259ed45a4ce57f5693e","rel":"produces"}
+    ],
+    "aliases": [
+      {"id":"WORLD:alpha","target":"12200000000000000000000000000000000000000000000000000000000000000000","status":"ok","t":1},
+      {"id":"WORLD:alpha","target":"1220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","status":"quarantined","reason":"bad signature","t":2}
+    ]
+  }
+  </script>
+
+  <script id="sample-proofs" type="application/json">
+  [
+    {
+      "id": "wire-conformance.latest.md",
+      "title": "Wire Conformance",
+      "establishes": "Deterministic wire mechanics and Haskell ↔ Rust conformance",
+      "command": "bash verify-wire.sh",
+      "timestamp": "2026-03-06T03:02:18Z",
+      "summary": "[verify-wire] ok wire conformance",
+      "content": "# Wire Conformance Receipt (Latest)\n\n- Date (UTC): 2026-03-06T03:02:18Z\n- Result: [verify-wire] ok wire conformance\n"
+    },
+    {
+      "id": "trace-semantics.latest.md",
+      "title": "Trace Semantics",
+      "establishes": "Materialized vs pending_fetch semantics in deterministic trace output",
+      "command": "ftf trace --realm ftf --topic provenance/demo ...",
+      "timestamp": "2026-03-06T03:10:01Z",
+      "summary": "A=ok, U=pending_fetch, root=B ok",
+      "content": "# Trace Semantics Receipt (Latest)\n\nBounded scenario: put(A), xform(A,U->B), trace(B).\n"
+    },
+    {
+      "id": "revoke-semantics.latest.md",
+      "title": "Revoke Semantics",
+      "establishes": "Revoke as annotation; lineage preserved",
+      "command": "ftf trace --realm ftf --topic provenance/revoke-demo ...",
+      "timestamp": "2026-03-06T03:14:56Z",
+      "summary": "trace.note revoke present; no lineage deletion",
+      "content": "# Revoke Semantics Receipt (Latest)\n\nRevoke annotates event history; it does not mutate structure.\n"
+    },
+    {
+      "id": "attest-semantics.latest.md",
+      "title": "Attest Semantics",
+      "establishes": "Attest as positive evidence annotation",
+      "command": "ftf trace --realm ftf --topic provenance/attest-demo ...",
+      "timestamp": "2026-03-06T03:26:32Z",
+      "summary": "trace.note attest present with claim=reproduced",
+      "content": "# Attest Semantics Receipt (Latest)\n\nAttest appears as a note while lineage remains unchanged.\n"
+    }
+  ]
+  </script>
+
+  <script src="script.js"></script>
+</body>
 </html>

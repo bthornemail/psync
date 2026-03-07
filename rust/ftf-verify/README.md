@@ -118,16 +118,24 @@ This verifier proves that the following protocol invariants are cross-language r
 
 If another language implementation produces the same results, it is wire-compatible with FTF.
 
+## Body kind support
+
+Current CBOR projection support includes:
+
+- `put`
+- `use`
+- `xform`
+- `attest`
+- `revoke`
+- `alias_claim`
+
+`resolve-alias` applies only to `alias_claim` records on alias topics. Other
+body kinds can coexist in verified streams and are handled by `verify-topic`.
+
 ## Future extensions
 
 Planned additions:
 
-- CBOR projection support for:
-  - `put`
-  - `use`
-  - `xform`
-  - `attest`
-  - `revoke`
 - disk-backed CAS validation
 - provenance replay verification
 
