@@ -1,0 +1,27 @@
+{
+  "header": {"kind": "trace.header", "root": "12203b141272f804d1f47614d0c94206168215ef8f3cf2d43259ed45a4ce57f5693e", "version": 1},
+  "artifacts": [
+    {"kind":"trace.artifact","h":"12203b141272f804d1f47614d0c94206168215ef8f3cf2d43259ed45a4ce57f5693e","role":"root","status":"ok"},
+    {"kind":"trace.artifact","h":"1220b6d98a430f1af52dc21a12e90db407c13f91ad74b1637b8dafbbc53c5a84af39","role":"dependency","status":"ok"},
+    {"kind":"trace.artifact","h":"1220170cdb96825c9894f1a5d71c6d3bcfbeb9ab1b5191b2b017d113e7c386e2bfdc","role":"dependency","status":"pending_fetch"}
+  ],
+  "events": [
+    {"kind":"trace.event","etype":"put","mh":"122098f64bd5fcb4eb073ee5581329e0444c372ae678b57190091b4e19720f01df13","t":1,"author":"1eefa6ca348764473450f89ac8f2c06ff38d88617820493acf68ef7a0b0acb0f","artifact":"1220b6d98a430f1af52dc21a12e90db407c13f91ad74b1637b8dafbbc53c5a84af39"},
+    {"kind":"trace.event","etype":"xform","mh":"1220ab14dceaa1ab54e67728f6ac2201a223d38a50e790a74eaf8883136c68ee459e","t":2,"author":"1eefa6ca348764473450f89ac8f2c06ff38d88617820493acf68ef7a0b0acb0f","inputs":["1220b6d98a430f1af52dc21a12e90db407c13f91ad74b1637b8dafbbc53c5a84af39","1220170cdb96825c9894f1a5d71c6d3bcfbeb9ab1b5191b2b017d113e7c386e2bfdc"],"outputs":["12203b141272f804d1f47614d0c94206168215ef8f3cf2d43259ed45a4ce57f5693e"],"tool":"1220dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+  ],
+  "notes": [
+    {"kind":"trace.note","note_type":"attest","about":"event:1220ab14dceaa1ab54e67728f6ac2201a223d38a50e790a74eaf8883136c68ee459e","mh":"12205fd9bb3085813bbfc51c5a2d7b2880f9d87ba1801a514f9eb6057384e7ec5f71","t":3,"claim":"reproduced","author":"1eefa6ca348764473450f89ac8f2c06ff38d88617820493acf68ef7a0b0acb0f"},
+    {"kind":"trace.note","note_type":"revoke","about":"event:1220ab14dceaa1ab54e67728f6ac2201a223d38a50e790a74eaf8883136c68ee459e","mh":"1220558f02e9c1f483734cc13bbee243533ada6ba907a25e41e75575452a646ce4e3","t":4,"reason":"bounded-conformance-test","author":"1eefa6ca348764473450f89ac8f2c06ff38d88617820493acf68ef7a0b0acb0f"},
+    {"kind":"trace.note","note_type":"pending_fetch","about":"artifact:1220170cdb96825c9894f1a5d71c6d3bcfbeb9ab1b5191b2b017d113e7c386e2bfdc"}
+  ],
+  "edges": [
+    {"kind":"trace.edge","from":"event:122098f64bd5fcb4eb073ee5581329e0444c372ae678b57190091b4e19720f01df13","to":"artifact:1220b6d98a430f1af52dc21a12e90db407c13f91ad74b1637b8dafbbc53c5a84af39","rel":"produces"},
+    {"kind":"trace.edge","from":"artifact:1220b6d98a430f1af52dc21a12e90db407c13f91ad74b1637b8dafbbc53c5a84af39","to":"event:1220ab14dceaa1ab54e67728f6ac2201a223d38a50e790a74eaf8883136c68ee459e","rel":"consumed_by"},
+    {"kind":"trace.edge","from":"artifact:1220170cdb96825c9894f1a5d71c6d3bcfbeb9ab1b5191b2b017d113e7c386e2bfdc","to":"event:1220ab14dceaa1ab54e67728f6ac2201a223d38a50e790a74eaf8883136c68ee459e","rel":"consumed_by"},
+    {"kind":"trace.edge","from":"event:1220ab14dceaa1ab54e67728f6ac2201a223d38a50e790a74eaf8883136c68ee459e","to":"artifact:12203b141272f804d1f47614d0c94206168215ef8f3cf2d43259ed45a4ce57f5693e","rel":"produces"}
+  ],
+  "aliases": [
+    {"id":"WORLD:alpha","target":"12200000000000000000000000000000000000000000000000000000000000000000","status":"ok","t":1},
+    {"id":"WORLD:alpha","target":"1220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","status":"quarantined","reason":"bad signature","t":2}
+  ]
+}

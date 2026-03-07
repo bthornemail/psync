@@ -42,6 +42,36 @@ struct MsgJson {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "kind")]
 enum BodyJson {
+    #[serde(rename = "put")]
+    Put {
+        artifact: PutArtifactJson,
+    },
+    #[serde(rename = "use")]
+    Use {
+        inputs: Vec<String>,
+        purpose: String,
+    },
+    #[serde(rename = "xform")]
+    Xform {
+        tool: ToolJson,
+        inputs: Vec<String>,
+        outputs: Vec<String>,
+        receipt: ReceiptJson,
+    },
+    #[serde(rename = "attest")]
+    Attest {
+        about: String,
+        claim: String,
+        #[serde(default)]
+        evidence: Vec<String>,
+    },
+    #[serde(rename = "revoke")]
+    Revoke {
+        target: String,
+        reason: String,
+        #[serde(default)]
+        superseded_by: Option<String>,
+    },
     #[serde(rename = "alias_claim")]
     AliasClaim {
         id: String,
@@ -51,6 +81,24 @@ enum BodyJson {
         #[serde(default)]
         note: Option<String>,
     },
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct PutArtifactJson {
+    hash: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct ToolJson {
+    id: String,
+    version: String,
+    params_hash: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct ReceiptJson {
+    recipe_hash: String,
+    env_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +117,32 @@ struct Msg {
 
 #[derive(Debug, Clone)]
 enum Body {
+    Put {
+        artifact_hash: Vec<u8>,
+    },
+    Use {
+        inputs: Vec<Vec<u8>>,
+        purpose: String,
+    },
+    Xform {
+        tool_id: Vec<u8>,
+        tool_version: String,
+        params_hash: Vec<u8>,
+        inputs: Vec<Vec<u8>>,
+        outputs: Vec<Vec<u8>>,
+        recipe_hash: Vec<u8>,
+        env_hash: Vec<u8>,
+    },
+    Attest {
+        about: Vec<u8>,
+        claim: String,
+        evidence: Vec<Vec<u8>>,
+    },
+    Revoke {
+        target: Vec<u8>,
+        reason: String,
+        superseded_by: Option<Vec<u8>>,
+    },
     AliasClaim {
         id: String,
         target_hash: Vec<u8>,
@@ -164,6 +238,73 @@ fn cbor_encode_msg(msg: &Msg, blank_sig: bool) -> Vec<u8> {
 
 fn cbor_encode_body(enc: &mut Encoder<&mut Vec<u8>>, body: &Body) {
     match body {
+        Body::Put { artifact_hash } => {
+            enc.array(2).unwrap();
+            enc.u64(1).unwrap();
+            enc.bytes(artifact_hash).unwrap();
+        }
+        Body::Use { inputs, purpose } => {
+            enc.array(3).unwrap();
+            enc.u64(2).unwrap();
+            enc.array(inputs.len() as u64).unwrap();
+            for h in inputs {
+                enc.bytes(h).unwrap();
+            }
+            enc.str(purpose).unwrap();
+        }
+        Body::Xform {
+            tool_id,
+            tool_version,
+            params_hash,
+            inputs,
+            outputs,
+            recipe_hash,
+            env_hash,
+        } => {
+            enc.array(8).unwrap();
+            enc.u64(3).unwrap();
+            enc.bytes(tool_id).unwrap();
+            enc.str(tool_version).unwrap();
+            enc.bytes(params_hash).unwrap();
+            enc.array(inputs.len() as u64).unwrap();
+            for h in inputs {
+                enc.bytes(h).unwrap();
+            }
+            enc.array(outputs.len() as u64).unwrap();
+            for h in outputs {
+                enc.bytes(h).unwrap();
+            }
+            enc.bytes(recipe_hash).unwrap();
+            enc.bytes(env_hash).unwrap();
+        }
+        Body::Attest {
+            about,
+            claim,
+            evidence,
+        } => {
+            enc.array(4).unwrap();
+            enc.u64(4).unwrap();
+            enc.bytes(about).unwrap();
+            enc.str(claim).unwrap();
+            enc.array(evidence.len() as u64).unwrap();
+            for h in evidence {
+                enc.bytes(h).unwrap();
+            }
+        }
+        Body::Revoke {
+            target,
+            reason,
+            superseded_by,
+        } => {
+            enc.array(4).unwrap();
+            enc.u64(5).unwrap();
+            enc.bytes(target).unwrap();
+            enc.str(reason).unwrap();
+            match superseded_by {
+                None => enc.null().unwrap(),
+                Some(b) => enc.bytes(b).unwrap(),
+            };
+        }
         Body::AliasClaim {
             id,
             target_hash,
@@ -320,6 +461,7 @@ fn resolve_aliases(replay: &[VerifiedItem]) -> (HashMap<String, AliasEntry>, Vec
                     );
                 }
             },
+            _ => {}
         }
     }
 
@@ -342,6 +484,60 @@ fn parse_msg(line_no: usize, line: &str) -> Result<Msg, FtfError> {
     let sig = hex_arr::<64>("sig", &j.sig)?;
 
     let body = match j.body {
+        BodyJson::Put { artifact } => Body::Put {
+            artifact_hash: hex_bytes("artifact.hash", &artifact.hash)?,
+        },
+        BodyJson::Use { inputs, purpose } => Body::Use {
+            inputs: inputs
+                .into_iter()
+                .map(|h| hex_bytes("inputs[]", &h))
+                .collect::<Result<Vec<_>, _>>()?,
+            purpose,
+        },
+        BodyJson::Xform {
+            tool,
+            inputs,
+            outputs,
+            receipt,
+        } => Body::Xform {
+            tool_id: hex_bytes("tool.id", &tool.id)?,
+            tool_version: tool.version,
+            params_hash: hex_bytes("tool.params_hash", &tool.params_hash)?,
+            inputs: inputs
+                .into_iter()
+                .map(|h| hex_bytes("inputs[]", &h))
+                .collect::<Result<Vec<_>, _>>()?,
+            outputs: outputs
+                .into_iter()
+                .map(|h| hex_bytes("outputs[]", &h))
+                .collect::<Result<Vec<_>, _>>()?,
+            recipe_hash: hex_bytes("receipt.recipe_hash", &receipt.recipe_hash)?,
+            env_hash: hex_bytes("receipt.env_hash", &receipt.env_hash)?,
+        },
+        BodyJson::Attest {
+            about,
+            claim,
+            evidence,
+        } => Body::Attest {
+            about: hex_bytes("about", &about)?,
+            claim,
+            evidence: evidence
+                .into_iter()
+                .map(|h| hex_bytes("evidence[]", &h))
+                .collect::<Result<Vec<_>, _>>()?,
+        },
+        BodyJson::Revoke {
+            target,
+            reason,
+            superseded_by,
+        } => Body::Revoke {
+            target: hex_bytes("target", &target)?,
+            reason,
+            superseded_by: match superseded_by {
+                None => None,
+                Some(h) => Some(hex_bytes("superseded_by", &h)?),
+            },
+        },
         BodyJson::AliasClaim {
             id,
             target_hash,
